@@ -8,13 +8,23 @@ import { renderNarratedVideo } from './narratedRenderer.js'
 import { generateNarration, buildSegmentedNarration } from './aiService.js'
 import { generateAudio, generateSegmentedAudio, generateAudioWithPauses, getVoices, getUsage } from './elevenLabsService.js'
 import { generateWorkflowFromText } from './workflowGenerator.js'
+import multer from 'multer'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
-// Folder na audio
+// Folder na audio i uploady
 const audioDir = join(__dirname, '..', 'output', 'audio')
+const uploadDir = join(__dirname, '..', 'output', 'uploads')
 if (!existsSync(audioDir)) mkdirSync(audioDir, { recursive: true })
+if (!existsSync(uploadDir)) mkdirSync(uploadDir, { recursive: true })
+
+// Konfiguracja multer do uploadu plików
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => cb(null, `avatar_${Date.now()}.mp4`)
+})
+const upload = multer({ storage, limits: { fileSize: 500 * 1024 * 1024 } }) // 500MB limit
 
 const app = express()
 const PORT = 3001
@@ -162,10 +172,39 @@ app.post('/api/generate-audio', async (req, res) => {
 // Generuj audio per segment (zsynchronizowane z animacją)
 app.post('/api/generate-segmented-audio', async (req, res) => {
   try {
-    const { narration, workflow, settings, elevenLabsApiKey, voiceId, useSSML } = req.body
+    const { narration, workflow, settings, elevenLabsApiKey, voiceId, useSSML, regenerateIndex } = req.body
 
     if (!narration || !workflow || !elevenLabsApiKey || !voiceId) {
       return res.status(400).json({ error: 'Missing required data' })
+    }
+
+    // Regeneracja pojedynczego segmentu
+    if (regenerateIndex !== null && regenerateIndex !== undefined) {
+      console.log(`[Audio] Regenerating single segment ${regenerateIndex}...`)
+
+      const SPEED_SETTINGS = {
+        slow: { nodeDelay: 1500, edgeDelay: 800 },
+        normal: { nodeDelay: 1000, edgeDelay: 500 },
+        fast: { nodeDelay: 600, edgeDelay: 300 }
+      }
+      const speedConfig = SPEED_SETTINGS[settings?.speed] || SPEED_SETTINGS.normal
+      const segments = buildSegmentedNarration(narration, workflow, speedConfig)
+
+      if (regenerateIndex >= segments.length) {
+        return res.status(400).json({ error: 'Invalid segment index' })
+      }
+
+      const segment = segments[regenerateIndex]
+      const segmentDir = join(audioDir, `segment_regen_${Date.now()}`)
+      mkdirSync(segmentDir, { recursive: true })
+
+      const results = await generateSegmentedAudio([segment], elevenLabsApiKey, voiceId, segmentDir)
+
+      return res.json({
+        success: true,
+        segments: results,
+        ssmlUsed: false
+      })
     }
 
     // SSML wyłączone - segmenty lepiej się synchronizują z animacją
@@ -316,11 +355,294 @@ app.post('/api/export-narrated', async (req, res) => {
   }
 })
 
+// === NOWY FLOW: Ręczny upload awatara ===
+
+// Przechowuj ostatnio renderowane wideo (ścieżka) i wyciągnięte audio
+let lastRenderedVideoPath = null
+let lastExtractedAudioPath = null
+
+// Eksport wideo + ekstrakcja audio (generuje oba naraz)
+// Zwraca JSON z info o plikach (użytkownik może pobrać oba)
+app.post('/api/export-with-audio-extract', async (req, res) => {
+  try {
+    const { workflow, settings, audioSegments } = req.body
+
+    if (!workflow || !workflow.nodes) {
+      return res.status(400).json({ error: 'Invalid workflow data' })
+    }
+
+    if (!audioSegments) {
+      return res.status(400).json({ error: 'Audio data required' })
+    }
+
+    console.log(`[Export+Audio] Rendering video...`)
+
+    // Renderuj wideo
+    const videoPath = await renderNarratedVideo(workflow, settings, audioSegments)
+    lastRenderedVideoPath = videoPath
+    console.log(`[Export+Audio] Video rendered: ${videoPath}`)
+
+    // Wyciągnij audio
+    console.log(`[Export+Audio] Extracting audio...`)
+    const audioPath = await extractAudioFromVideo(videoPath, audioDir)
+    lastExtractedAudioPath = audioPath
+    console.log(`[Export+Audio] Audio extracted: ${audioPath}`)
+
+    // Zwróć info o obu plikach
+    res.json({
+      success: true,
+      videoPath,
+      videoFileName: videoPath.split('/').pop(),
+      audioPath,
+      audioFileName: audioPath.split('/').pop()
+    })
+  } catch (error) {
+    console.error('[Export+Audio] Error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Pobierz wideo (po wygenerowaniu przez export-with-audio-extract)
+app.get('/api/download-video/:filename', (req, res) => {
+  const { filename } = req.params
+  const videoPath = join(__dirname, '..', 'output', filename)
+
+  if (!existsSync(videoPath)) {
+    return res.status(404).json({ error: 'Video file not found' })
+  }
+
+  res.download(videoPath, filename, (err) => {
+    if (err) {
+      console.error('[Download Video] Error:', err)
+    }
+  })
+})
+
+// Pobierz audio (po wygenerowaniu przez export-with-audio-extract)
+app.get('/api/download-audio/:filename', (req, res) => {
+  const { filename } = req.params
+  const audioPath = join(audioDir, filename)
+
+  if (!existsSync(audioPath)) {
+    return res.status(404).json({ error: 'Audio file not found' })
+  }
+
+  res.download(audioPath, filename, (err) => {
+    if (err) {
+      console.error('[Download Audio] Error:', err)
+    }
+  })
+})
+
+// Upload awatara i montaż z wideo
+app.post('/api/combine-uploaded-avatar', upload.single('avatarVideo'), async (req, res) => {
+  try {
+    const avatarVideoPath = req.file?.path
+
+    if (!avatarVideoPath) {
+      return res.status(400).json({ error: 'Avatar video file required' })
+    }
+
+    // Sprawdź czy mamy renderowane wideo
+    if (!lastRenderedVideoPath || !existsSync(lastRenderedVideoPath)) {
+      return res.status(400).json({ error: 'No rendered video found. Generate video first.' })
+    }
+
+    console.log(`[Combine Avatar] Combining...`)
+    console.log(`[Combine Avatar] Main video: ${lastRenderedVideoPath}`)
+    console.log(`[Combine Avatar] Avatar: ${avatarVideoPath}`)
+
+    // Połącz wideo z awatarem (awatar w lewym dolnym rogu, audio z main video bez duplikacji)
+    const outputPath = await combineVideoWithUploadedAvatar(lastRenderedVideoPath, avatarVideoPath, audioDir)
+
+    console.log(`[Combine Avatar] Final video: ${outputPath}`)
+
+    // Zwróć finalny plik
+    res.download(outputPath, `workflow-with-avatar.mp4`, (err) => {
+      if (err) {
+        console.error('[Combine Avatar] Download error:', err)
+      }
+    })
+  } catch (error) {
+    console.error('[Combine Avatar] Error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Pomocnicza funkcja do łączenia segmentów audio
+async function mergeAudioSegments(audioData, outputDir) {
+  const { spawn } = await import('child_process')
+
+  const segments = audioData.segments || audioData
+  if (!segments || segments.length === 0) {
+    throw new Error('No audio segments to merge')
+  }
+
+  // Zbierz ścieżki audio
+  const audioPaths = []
+
+  // Intro
+  const intro = segments.find(s => s.type === 'intro')
+  if (intro?.path && existsSync(intro.path)) {
+    audioPaths.push(intro.path)
+  }
+
+  // Node segments
+  const nodeSegments = segments.filter(s => s.type === 'node')
+  for (const seg of nodeSegments) {
+    if (seg.path && existsSync(seg.path)) {
+      audioPaths.push(seg.path)
+    }
+  }
+
+  // Outro
+  const outro = segments.find(s => s.type === 'outro')
+  if (outro?.path && existsSync(outro.path)) {
+    audioPaths.push(outro.path)
+  }
+
+  if (audioPaths.length === 0) {
+    throw new Error('No valid audio files found')
+  }
+
+  console.log(`[MergeAudio] Merging ${audioPaths.length} audio files...`)
+
+  // Użyj FFmpeg do połączenia
+  const outputPath = join(outputDir, `merged_${Date.now()}.mp3`)
+
+  // Stwórz plik listy
+  const listPath = join(outputDir, `list_${Date.now()}.txt`)
+  const listContent = audioPaths.map(p => `file '${p}'`).join('\n')
+  const { writeFileSync } = await import('fs')
+  writeFileSync(listPath, listContent)
+
+  return new Promise((resolve, reject) => {
+    const ffmpeg = spawn('ffmpeg', [
+      '-y',
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', listPath,
+      '-c', 'copy',
+      outputPath
+    ])
+
+    ffmpeg.on('close', (code) => {
+      // Usuń plik listy
+      try { require('fs').unlinkSync(listPath) } catch (e) {}
+
+      if (code === 0) {
+        console.log('[MergeAudio] Audio merged successfully')
+        resolve(outputPath)
+      } else {
+        reject(new Error(`FFmpeg merge failed with code ${code}`))
+      }
+    })
+
+    ffmpeg.on('error', reject)
+  })
+}
+
+// Wyciągnij audio z wideo (FFmpeg)
+async function extractAudioFromVideo(videoPath, outputDir) {
+  const { spawn } = await import('child_process')
+
+  const outputPath = join(outputDir, `extracted_${Date.now()}.mp3`)
+
+  console.log(`[ExtractAudio] Extracting audio from video...`)
+
+  return new Promise((resolve, reject) => {
+    const ffmpeg = spawn('ffmpeg', [
+      '-y',
+      '-i', videoPath,
+      '-vn',                    // Bez wideo
+      '-acodec', 'libmp3lame',  // Kodek MP3
+      '-q:a', '2',              // Jakość (0-9, niższy = lepszy)
+      outputPath
+    ])
+
+    let stderr = ''
+    ffmpeg.stderr.on('data', (data) => {
+      stderr += data.toString()
+    })
+
+    ffmpeg.on('close', (code) => {
+      if (code === 0) {
+        console.log('[ExtractAudio] Audio extracted successfully')
+        resolve(outputPath)
+      } else {
+        console.error('[ExtractAudio] FFmpeg stderr:', stderr)
+        reject(new Error(`FFmpeg extract failed with code ${code}`))
+      }
+    })
+
+    ffmpeg.on('error', reject)
+  })
+}
+
+// Połącz wideo z uploadowanym awatarem (overlay w lewym dolnym rogu)
+// UWAGA: Audio pozostaje z głównego wideo (nie duplikujemy)
+async function combineVideoWithUploadedAvatar(mainVideoPath, avatarVideoPath, outputDir) {
+  const { spawn } = await import('child_process')
+
+  const outputPath = join(outputDir, `final_${Date.now()}.mp4`)
+
+  console.log(`[CombineVideo] Combining videos with uploaded avatar...`)
+
+  // Pozycja awatara: lewy dolny róg z 20px odstępem
+  const overlayPosition = '20:H-h-20'
+
+  return new Promise((resolve, reject) => {
+    // FFmpeg command:
+    // 1. Weź główne wideo (z audio - ElevenLabs)
+    // 2. Weź awatara, przeskaluj do 25% i usuń zielone tło (chroma key)
+    // 3. Overlay awatara na głównym wideo
+    // 4. ZACHOWAJ audio z głównego wideo (nie z awatara!)
+    const ffmpeg = spawn('ffmpeg', [
+      '-y',
+      '-i', mainVideoPath,      // Input 0: główne wideo (z audio ElevenLabs)
+      '-i', avatarVideoPath,    // Input 1: awatar (ignorujemy jego audio)
+      '-filter_complex',
+      // Przeskaluj awatara do 25% szerokości i usuń zielone tło
+      `[1:v]scale=iw*0.25:-1,chromakey=0x00FF00:0.3:0.1[avatar];` +
+      // Overlay awatara na głównym wideo
+      `[0:v][avatar]overlay=${overlayPosition}[outv]`,
+      '-map', '[outv]',         // Użyj połączonego wideo
+      '-map', '0:a',            // Użyj audio z GŁÓWNEGO wideo (0) - nie z awatara!
+      '-c:v', 'libx264',
+      '-preset', 'fast',
+      '-crf', '23',
+      '-c:a', 'aac',
+      '-b:a', '192k',
+      '-shortest',              // Zakończ gdy krótsze wideo się skończy
+      outputPath
+    ])
+
+    let stderr = ''
+    ffmpeg.stderr.on('data', (data) => {
+      stderr += data.toString()
+    })
+
+    ffmpeg.on('close', (code) => {
+      if (code === 0) {
+        console.log('[CombineVideo] Videos combined successfully')
+        resolve(outputPath)
+      } else {
+        console.error('[CombineVideo] FFmpeg stderr:', stderr)
+        reject(new Error(`FFmpeg combine failed with code ${code}`))
+      }
+    })
+
+    ffmpeg.on('error', reject)
+  })
+}
+
 app.listen(PORT, () => {
   console.log(`[Server] Running on http://localhost:${PORT}`)
   console.log(`[Server] Endpoints:`)
   console.log(`  POST /api/export - Export video`)
-  console.log(`  POST /api/export-with-audio - Export video with narration`)
-  console.log(`  POST /api/generate-narration - Generate AI narration`)
-  console.log(`  POST /api/generate-audio - Generate ElevenLabs audio`)
+  console.log(`  POST /api/export-narrated - Export video with narration`)
+  console.log(`  POST /api/export-with-audio-extract - Generate video + extract audio`)
+  console.log(`  GET  /api/download-video/:filename - Download video file`)
+  console.log(`  GET  /api/download-audio/:filename - Download audio file`)
+  console.log(`  POST /api/combine-uploaded-avatar - Combine with uploaded avatar`)
 })

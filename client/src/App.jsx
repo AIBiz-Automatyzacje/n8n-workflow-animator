@@ -1,13 +1,16 @@
 import React, { useState, useCallback } from 'react'
 import WorkflowInput from './components/WorkflowInput.jsx'
 import Settings from './components/Settings.jsx'
-import NarrationPanel from './components/NarrationPanel.jsx'
+import WorkflowSteps from './components/WorkflowSteps.jsx'
+import NarrationEditor from './components/NarrationEditor.jsx'
+import AudioPreview from './components/AudioPreview.jsx'
+import ApiKeys from './components/ApiKeys.jsx'
 
 const styles = {
   container: {
     minHeight: '100vh',
-    padding: '20px',
-    maxWidth: '1400px',
+    padding: '20px 40px',
+    maxWidth: '1000px',
     margin: '0 auto'
   },
   header: {
@@ -20,30 +23,43 @@ const styles = {
     color: '#ff6b6b',
     marginBottom: '8px'
   },
-  subtitle: {
-    color: '#888',
-    fontSize: '1rem'
+  section: {
+    marginBottom: '24px'
   },
-  mainGrid: {
-    display: 'grid',
-    gridTemplateColumns: '300px 1fr',
-    gap: '20px',
-    minHeight: '600px'
-  },
-  sidebar: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '20px'
-  },
-  previewArea: {
+  card: {
     background: '#16213e',
     borderRadius: '12px',
-    overflow: 'hidden',
+    padding: '24px',
+    marginBottom: '20px'
+  },
+  sectionTitle: {
+    fontSize: '1.1rem',
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: '16px',
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'center'
+    gap: '10px'
   },
-  exportButton: {
+  stepNumber: {
+    width: '28px',
+    height: '28px',
+    borderRadius: '50%',
+    background: '#ff6b6b',
+    color: '#fff',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '0.9rem',
+    fontWeight: 'bold'
+  },
+  stepNumberDisabled: {
+    background: '#444'
+  },
+  stepNumberCompleted: {
+    background: '#4ecdc4'
+  },
+  button: {
     width: '100%',
     padding: '16px',
     fontSize: '1.1rem',
@@ -55,9 +71,15 @@ const styles = {
     cursor: 'pointer',
     transition: 'transform 0.2s, box-shadow 0.2s'
   },
-  exportButtonDisabled: {
+  buttonDisabled: {
     background: '#444',
     cursor: 'not-allowed'
+  },
+  buttonSecondary: {
+    background: 'linear-gradient(135deg, #9b59b6, #8e44ad)'
+  },
+  buttonTertiary: {
+    background: 'linear-gradient(135deg, #3498db, #2980b9)'
   },
   progressBar: {
     width: '100%',
@@ -71,37 +93,74 @@ const styles = {
     height: '100%',
     background: 'linear-gradient(90deg, #ff6b6b, #feca57)',
     transition: 'width 0.3s'
+  },
+  status: {
+    fontSize: '0.9rem',
+    color: '#888',
+    marginTop: '12px',
+    textAlign: 'center'
+  },
+  statusSuccess: {
+    color: '#4ecdc4'
+  },
+  statusError: {
+    color: '#ff6b6b'
   }
 }
 
 function App() {
+  // Stan główny
   const [workflow, setWorkflow] = useState(null)
-  const [settings, setSettings] = useState({
-    aspectRatio: '16:9',
-    speed: 'normal',
-    animationMode: 'narrated'
-  })
-  const [isExporting, setIsExporting] = useState(false)
-  const [isGeneratingWorkflow, setIsGeneratingWorkflow] = useState(false)
-  const [exportProgress, setExportProgress] = useState(0)
+  const [workflowSteps, setWorkflowSteps] = useState(null) // Edytowalne etapy workflow
   const [narration, setNarration] = useState(null)
   const [audioSegments, setAudioSegments] = useState(null)
 
-  const handleGenerateWorkflow = useCallback(async (description) => {
+  // Stan UI
+  const [settings, setSettings] = useState({
+    aspectRatio: '16:9',
+    speed: 'normal'
+  })
+  const [isGeneratingWorkflow, setIsGeneratingWorkflow] = useState(false)
+  const [isGeneratingNarration, setIsGeneratingNarration] = useState(false)
+  const [isGeneratingAudio, setIsGeneratingAudio] = useState(false)
+  const [isExporting, setIsExporting] = useState(false)
+  const [isCombiningAvatar, setIsCombiningAvatar] = useState(false)
+  const [generatedFiles, setGeneratedFiles] = useState(null) // { videoFileName, audioFileName }
+  const [status, setStatus] = useState('')
+  const [statusType, setStatusType] = useState('')
+
+  // Klucze API (z localStorage)
+  const getApiKeys = () => ({
+    replicateApiKey: localStorage.getItem('replicateApiKey') || '',
+    elevenLabsApiKey: localStorage.getItem('elevenLabsApiKey') || '',
+    voiceId: localStorage.getItem('voiceId') || '3gtL0ar0RJdNhYpZ7pNZ'
+  })
+
+  // KROK 1: Generowanie workflow
+  const handleGenerateWorkflow = useCallback(async (description, context) => {
+    const { replicateApiKey } = getApiKeys()
+    if (!replicateApiKey) {
+      setStatus('Podaj Replicate API Key w sekcji Klucze API')
+      setStatusType('error')
+      return
+    }
+
     setIsGeneratingWorkflow(true)
+    setStatus('Generowanie workflow...')
+    setStatusType('')
+
+    // Reset kolejnych kroków
+    setWorkflowSteps(null)
+    setNarration(null)
+    setAudioSegments(null)
 
     try {
-      const replicateApiKey = localStorage.getItem('replicateApiKey')
-      if (!replicateApiKey) {
-        alert('Podaj Replicate API Key w panelu narracji')
-        return
-      }
-
       const response = await fetch('/api/generate-workflow', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           description,
+          context,
           replicateApiToken: replicateApiKey
         })
       })
@@ -110,40 +169,134 @@ function App() {
 
       if (data.success) {
         setWorkflow(data.workflow)
+
+        // Stwórz edytowalne etapy z wygenerowanego workflow (z danymi AI)
+        const steps = data.workflow.nodes.map((node, index) => ({
+          id: node.id || `node-${index}`,
+          name: node.name,
+          type: node.shortType || node.type,
+          tileTitle: node.tileTitle || node.actionTitle || node.name,
+          popupTitle: node.popupTitle || node.toolName || node.shortType || '',
+          popupDescription: node.popupDescription || ''
+        }))
+        setWorkflowSteps(steps)
+
+        setStatus('Workflow wygenerowany! Możesz edytować etapy.')
+        setStatusType('success')
       } else {
-        alert('Błąd generowania workflow: ' + data.error)
+        setStatus(`Błąd: ${data.error}`)
+        setStatusType('error')
       }
     } catch (err) {
-      alert('Błąd: ' + err.message)
+      setStatus(`Błąd: ${err.message}`)
+      setStatusType('error')
     } finally {
       setIsGeneratingWorkflow(false)
     }
   }, [])
 
-  const handleSettingsChange = useCallback((newSettings) => {
-    setSettings(newSettings)
-    if (workflow) {
-      // Re-parse z nowym aspect ratio
-      setWorkflow(prev => ({
-        ...prev,
-        aspectRatio: newSettings.aspectRatio
-      }))
-    }
-  }, [workflow])
+  // KROK 2: Generowanie narracji
+  const handleGenerateNarration = useCallback(async (context) => {
+    const { replicateApiKey } = getApiKeys()
+    if (!replicateApiKey || !workflow) return
 
-  const handleExportWithAudio = async () => {
+    setIsGeneratingNarration(true)
+    setStatus('Generowanie narracji AI...')
+    setStatusType('')
+
+    // Reset audio
+    setAudioSegments(null)
+
+    try {
+      const response = await fetch('/api/generate-narration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workflow,
+          workflowSteps, // Przekaż edytowane etapy
+          replicateApiToken: replicateApiKey,
+          context
+        })
+      })
+
+      const data = await response.json()
+
+      if (data.success) {
+        setNarration(data.narration)
+        setStatus('Narracja wygenerowana! Możesz edytować teksty.')
+        setStatusType('success')
+      } else {
+        setStatus(`Błąd: ${data.error}`)
+        setStatusType('error')
+      }
+    } catch (err) {
+      setStatus(`Błąd: ${err.message}`)
+      setStatusType('error')
+    } finally {
+      setIsGeneratingNarration(false)
+    }
+  }, [workflow, workflowSteps])
+
+  // KROK 3: Generowanie audio
+  const handleGenerateAudio = useCallback(async (segmentIndex = null) => {
+    const { elevenLabsApiKey, voiceId } = getApiKeys()
+    if (!elevenLabsApiKey || !narration) return
+
+    setIsGeneratingAudio(true)
+    const isRegenerate = segmentIndex !== null
+    setStatus(isRegenerate ? `Regenerowanie audio #${segmentIndex + 1}...` : 'Generowanie audio...')
+    setStatusType('')
+
+    try {
+      const response = await fetch('/api/generate-segmented-audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          narration,
+          workflow,
+          settings,
+          elevenLabsApiKey,
+          voiceId,
+          regenerateIndex: segmentIndex
+        })
+      })
+
+      const data = await response.json()
+
+      if (data.success) {
+        if (isRegenerate && audioSegments) {
+          // Podmień tylko jeden segment
+          const newSegments = { ...audioSegments }
+          newSegments.segments[segmentIndex] = data.segments[0]
+          setAudioSegments(newSegments)
+        } else {
+          setAudioSegments(data)
+        }
+        setStatus('Audio wygenerowane!')
+        setStatusType('success')
+      } else {
+        setStatus(`Błąd: ${data.error}`)
+        setStatusType('error')
+      }
+    } catch (err) {
+      setStatus(`Błąd: ${err.message}`)
+      setStatusType('error')
+    } finally {
+      setIsGeneratingAudio(false)
+    }
+  }, [narration, workflow, settings, audioSegments])
+
+  // KROK 4: Generuj wideo + audio (oba naraz)
+  const handleExport = async () => {
     if (!workflow || !audioSegments) return
 
     setIsExporting(true)
-    setExportProgress(0)
+    setGeneratedFiles(null)
+    setStatus('Generowanie wideo i audio...')
+    setStatusType('')
 
     try {
-      // Wybierz endpoint w zależności od trybu animacji
-      const endpoint = settings.animationMode === 'narrated'
-        ? '/api/export-narrated'
-        : '/api/export-with-audio'
-
-      const response = await fetch(endpoint, {
+      const response = await fetch('/api/export-with-audio-extract', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -153,116 +306,368 @@ function App() {
         })
       })
 
-      if (!response.ok) throw new Error('Export failed')
+      const data = await response.json()
+
+      if (!data.success) {
+        throw new Error(data.error || 'Export failed')
+      }
+
+      // Zapisz info o plikach
+      setGeneratedFiles({
+        videoFileName: data.videoFileName,
+        audioFileName: data.audioFileName
+      })
+
+      setStatus('Gotowe! Możesz pobrać wideo i/lub audio.')
+      setStatusType('success')
+    } catch (err) {
+      setStatus(`Błąd eksportu: ${err.message}`)
+      setStatusType('error')
+    } finally {
+      setIsExporting(false)
+    }
+  }
+
+  // Pobierz wideo
+  const handleDownloadVideo = () => {
+    if (!generatedFiles?.videoFileName) return
+    const a = document.createElement('a')
+    a.href = `/api/download-video/${generatedFiles.videoFileName}`
+    a.download = `${workflow.name || 'workflow'}-narrated.mp4`
+    a.click()
+  }
+
+  // Pobierz audio
+  const handleDownloadAudio = () => {
+    if (!generatedFiles?.audioFileName) return
+    const a = document.createElement('a')
+    a.href = `/api/download-audio/${generatedFiles.audioFileName}`
+    a.download = `${workflow.name || 'workflow'}-audio.mp3`
+    a.click()
+  }
+
+  // Upload awatara i montaż
+  const handleAvatarUpload = async (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    setIsCombiningAvatar(true)
+    setStatus('Łączenie wideo z awatarem...')
+    setStatusType('')
+
+    try {
+      const formData = new FormData()
+      formData.append('avatarVideo', file)
+
+      const response = await fetch('/api/combine-uploaded-avatar', {
+        method: 'POST',
+        body: formData
+      })
+
+      if (!response.ok) {
+        const data = await response.json()
+        throw new Error(data.error || 'Combine failed')
+      }
 
       const blob = await response.blob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      const suffix = settings.animationMode === 'narrated' ? '-narrated' : '-animation-with-audio'
-      a.download = `${workflow.name || 'workflow'}${suffix}.mp4`
+      a.download = `${workflow.name || 'workflow'}-with-avatar.mp4`
       a.click()
       URL.revokeObjectURL(url)
+
+      setStatus('Wideo z awatarem pobrane!')
+      setStatusType('success')
     } catch (err) {
-      alert('Błąd eksportu: ' + err.message)
+      setStatus(`Błąd: ${err.message}`)
+      setStatusType('error')
     } finally {
-      setIsExporting(false)
-      setExportProgress(0)
+      setIsCombiningAvatar(false)
     }
+  }
+
+  // Helpers
+  const getStepStatus = (stepNum) => {
+    if (stepNum === 1) return workflow ? 'completed' : 'active'
+    if (stepNum === 2) return narration ? 'completed' : workflow ? 'active' : 'disabled'
+    if (stepNum === 3) return audioSegments ? 'completed' : narration ? 'active' : 'disabled'
+    if (stepNum === 4) return audioSegments ? 'active' : 'disabled' // Eksport
+    return 'disabled'
+  }
+
+  const getStepNumberStyle = (stepNum) => {
+    const status = getStepStatus(stepNum)
+    if (status === 'completed') return { ...styles.stepNumber, ...styles.stepNumberCompleted }
+    if (status === 'disabled') return { ...styles.stepNumber, ...styles.stepNumberDisabled }
+    return styles.stepNumber
   }
 
   return (
     <div style={styles.container}>
       <header style={styles.header}>
         <h1 style={styles.title}>N8N Workflow Animator</h1>
-        <p style={styles.subtitle}>Opisz workflow tekstem i wygeneruj animowane wideo</p>
       </header>
 
-      <div style={styles.mainGrid}>
-        <div style={styles.sidebar}>
+      {/* KROK 1: Opis workflow */}
+      <div style={styles.section}>
+        <div style={styles.card}>
+          <h2 style={styles.sectionTitle}>
+            <span style={getStepNumberStyle(1)}>1</span>
+            Opis Workflow
+          </h2>
           <WorkflowInput
             onGenerate={handleGenerateWorkflow}
             isGenerating={isGeneratingWorkflow}
           />
-
-          <Settings
-            settings={settings}
-            onChange={handleSettingsChange}
-            disabled={!workflow || isGeneratingWorkflow}
-          />
-
-          <NarrationPanel
-            workflow={workflow}
-            settings={settings}
-            disabled={!workflow}
-            onNarrationGenerated={setNarration}
-            onAudioGenerated={setAudioSegments}
-          />
-
-          {audioSegments && (
-            <button
-              style={{
-                ...styles.exportButton,
-                marginTop: '10px',
-                background: settings.animationMode === 'narrated'
-                  ? 'linear-gradient(135deg, #9b59b6, #8e44ad)'
-                  : 'linear-gradient(135deg, #3498db, #2980b9)',
-                ...(isExporting ? styles.exportButtonDisabled : {})
-              }}
-              onClick={handleExportWithAudio}
-              disabled={isExporting}
-            >
-              {isExporting
-                ? 'Eksportowanie...'
-                : settings.animationMode === 'narrated'
-                  ? 'Generuj MP4 z narracja (sync)'
-                  : 'Generuj MP4 z audio (klasyczny)'}
-            </button>
-          )}
-
-          {isExporting && (
-            <div style={styles.progressBar}>
-              <div
-                style={{
-                  ...styles.progressFill,
-                  width: `${exportProgress}%`
-                }}
-              />
-            </div>
-          )}
-
-          {workflow && (
-            <div style={{ color: '#888', fontSize: '0.9rem' }}>
-              Workflow: <strong>{workflow.name}</strong><br/>
-              Nodes: <strong>{workflow.nodes.length}</strong>
-            </div>
-          )}
-        </div>
-
-        <div style={styles.previewArea}>
-          {workflow ? (
-            <div style={{ textAlign: 'center', padding: '40px', color: '#888' }}>
-              <div style={{ fontSize: '3rem', marginBottom: '20px' }}>🎬</div>
-              <div style={{ fontSize: '1.2rem', marginBottom: '10px' }}>
-                Workflow wygenerowany: <strong style={{ color: '#fff' }}>{workflow.name}</strong>
-              </div>
-              <div style={{ fontSize: '0.9rem' }}>
-                Nodes: {workflow.nodes.length} • Edges: {workflow.edges.length}
-              </div>
-              <div style={{ fontSize: '0.85rem', marginTop: '20px', color: '#666' }}>
-                Wygeneruj narrację i wyeksportuj do MP4 z lewego panelu
-              </div>
-            </div>
-          ) : (
-            <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
-              <div style={{ fontSize: '3rem', marginBottom: '20px' }}>📝</div>
-              <div style={{ fontSize: '1rem' }}>
-                Opisz workflow w lewym panelu i wygeneruj
-              </div>
-            </div>
-          )}
         </div>
       </div>
+
+      {/* Edytowalne etapy workflow (po wygenerowaniu) */}
+      {workflowSteps && (
+        <div style={styles.section}>
+          <div style={styles.card}>
+            <h2 style={styles.sectionTitle}>
+              <span style={getStepNumberStyle(1)}>✓</span>
+              Etapy workflow
+            </h2>
+            <WorkflowSteps
+              steps={workflowSteps}
+              onChange={setWorkflowSteps}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* KROK 2: Narracja */}
+      {workflow && (
+        <div style={styles.section}>
+          <div style={styles.card}>
+            <h2 style={styles.sectionTitle}>
+              <span style={getStepNumberStyle(2)}>2</span>
+              Narracja
+            </h2>
+            <button
+              style={{
+                ...styles.button,
+                ...styles.buttonSecondary,
+                ...(isGeneratingNarration ? styles.buttonDisabled : {})
+              }}
+              onClick={() => handleGenerateNarration(localStorage.getItem('workflowContext') || '')}
+              disabled={isGeneratingNarration}
+            >
+              {isGeneratingNarration ? 'Generowanie...' : 'Generuj narrację'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Edytor narracji (po wygenerowaniu) */}
+      {narration && (
+        <div style={styles.section}>
+          <div style={styles.card}>
+            <h2 style={styles.sectionTitle}>
+              <span style={getStepNumberStyle(2)}>✓</span>
+              Edycja narracji
+            </h2>
+            <NarrationEditor
+              narration={narration}
+              onChange={setNarration}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* KROK 3: Audio */}
+      {narration && (
+        <div style={styles.section}>
+          <div style={styles.card}>
+            <h2 style={styles.sectionTitle}>
+              <span style={getStepNumberStyle(3)}>3</span>
+              Audio (ElevenLabs)
+            </h2>
+            <button
+              style={{
+                ...styles.button,
+                ...styles.buttonTertiary,
+                ...(isGeneratingAudio ? styles.buttonDisabled : {})
+              }}
+              onClick={() => handleGenerateAudio()}
+              disabled={isGeneratingAudio}
+            >
+              {isGeneratingAudio ? 'Generowanie...' : 'Generuj audio'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Podgląd audio (po wygenerowaniu) */}
+      {audioSegments && (
+        <div style={styles.section}>
+          <div style={styles.card}>
+            <h2 style={styles.sectionTitle}>
+              <span style={getStepNumberStyle(3)}>✓</span>
+              Podgląd audio
+            </h2>
+            <AudioPreview
+              audioSegments={audioSegments}
+              narration={narration}
+              onRegenerate={handleGenerateAudio}
+              isRegenerating={isGeneratingAudio}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* KROK 4: Eksport */}
+      {audioSegments && (
+        <div style={styles.section}>
+          <div style={styles.card}>
+            <h2 style={styles.sectionTitle}>
+              <span style={getStepNumberStyle(4)}>4</span>
+              Generuj wideo
+            </h2>
+
+            {/* Przycisk generowania */}
+            <button
+              style={{
+                ...styles.button,
+                ...(isExporting ? styles.buttonDisabled : {}),
+                marginBottom: '12px'
+              }}
+              onClick={handleExport}
+              disabled={isExporting || isCombiningAvatar}
+            >
+              {isExporting ? 'Generowanie wideo i audio...' : 'Generuj wideo'}
+            </button>
+
+            {isExporting && (
+              <div style={styles.progressBar}>
+                <div style={{ ...styles.progressFill, width: '50%' }} />
+              </div>
+            )}
+
+            {/* Po wygenerowaniu - przyciski pobierania */}
+            {generatedFiles && (
+              <div style={{
+                marginTop: '16px',
+                padding: '16px',
+                background: '#1a3a1a',
+                borderRadius: '8px',
+                border: '1px solid #4ecdc4'
+              }}>
+                <div style={{ fontSize: '0.95rem', fontWeight: 'bold', color: '#4ecdc4', marginBottom: '12px' }}>
+                  Pliki gotowe do pobrania
+                </div>
+
+                <div style={{ display: 'flex', gap: '12px', marginBottom: '8px' }}>
+                  <button
+                    style={{
+                      ...styles.button,
+                      flex: 1,
+                      padding: '12px'
+                    }}
+                    onClick={handleDownloadVideo}
+                  >
+                    Pobierz MP4
+                  </button>
+                  <button
+                    style={{
+                      ...styles.button,
+                      ...styles.buttonSecondary,
+                      flex: 1,
+                      padding: '12px'
+                    }}
+                    onClick={handleDownloadAudio}
+                  >
+                    Pobierz audio (MP3)
+                  </button>
+                </div>
+                <div style={{ fontSize: '0.75rem', color: '#888' }}>
+                  Audio zsynchronizowane z animacją - użyj go do generowania awatara w HeyGen
+                </div>
+              </div>
+            )}
+
+            {/* Sekcja awatara - aktywna po wygenerowaniu */}
+            {generatedFiles && (
+              <div style={{
+                marginTop: '20px',
+                padding: '16px',
+                background: '#1a1a3e',
+                borderRadius: '8px',
+                border: '1px solid #333'
+              }}>
+                <div style={{ fontSize: '0.95rem', fontWeight: 'bold', color: '#e74c3c', marginBottom: '12px' }}>
+                  Dodaj awatara AI (opcjonalnie)
+                </div>
+                <div style={{ fontSize: '0.8rem', color: '#888', marginBottom: '12px' }}>
+                  1. Pobierz audio powyżej<br/>
+                  2. Wygeneruj awatara na stronie HeyGen używając tego audio<br/>
+                  3. Wgraj wideo awatara poniżej
+                </div>
+
+                <label style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '14px',
+                  background: isCombiningAvatar
+                    ? '#333'
+                    : 'linear-gradient(135deg, #e74c3c, #c0392b)',
+                  color: '#fff',
+                  fontWeight: 'bold',
+                  textAlign: 'center',
+                  borderRadius: '8px',
+                  cursor: isCombiningAvatar ? 'not-allowed' : 'pointer',
+                  opacity: isCombiningAvatar ? 0.5 : 1
+                }}>
+                  {isCombiningAvatar ? 'Łączenie wideo z awatarem...' : 'Wgraj awatara (MP4)'}
+                  <input
+                    type="file"
+                    accept="video/mp4,video/*"
+                    onChange={handleAvatarUpload}
+                    disabled={isCombiningAvatar}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+                <div style={{ fontSize: '0.75rem', color: '#888', marginTop: '8px' }}>
+                  Awatar zostanie zamontowany w lewym dolnym rogu (chroma key dla zielonego tła)
+                </div>
+
+                {isCombiningAvatar && (
+                  <div style={{ ...styles.progressBar, marginTop: '12px' }}>
+                    <div style={{ ...styles.progressFill, width: '50%' }} />
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Ustawienia */}
+      <div style={styles.section}>
+        <Settings
+          settings={settings}
+          onChange={setSettings}
+        />
+      </div>
+
+      {/* Klucze API - na końcu */}
+      <div style={styles.section}>
+        <ApiKeys />
+      </div>
+
+      {/* Status */}
+      {status && (
+        <div style={{
+          ...styles.status,
+          ...(statusType === 'success' ? styles.statusSuccess : {}),
+          ...(statusType === 'error' ? styles.statusError : {})
+        }}>
+          {status}
+        </div>
+      )}
     </div>
   )
 }

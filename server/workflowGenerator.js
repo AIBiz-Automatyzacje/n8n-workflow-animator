@@ -56,8 +56,9 @@ FORMAT ODPOWIEDZI (TYLKO CZYSTY JSON):
       "type": "n8n-nodes-base.schedule",
       "shortType": "Schedule Trigger",
       "emoji": "⏰",
-      "actionTitle": "Uruchom co 15 minut",
-      "toolName": "Harmonogram",
+      "tileTitle": "Uruchom harmonogram",
+      "popupTitle": "Automatyczny trigger",
+      "popupDescription": "Workflow uruchamia się automatycznie co 15 minut, sprawdzając czy są nowe dane do przetworzenia.",
       "x": 200,
       "y": 500,
       "color": "#ff6b6b"
@@ -67,8 +68,9 @@ FORMAT ODPOWIEDZI (TYLKO CZYSTY JSON):
       "type": "n8n-nodes-base.facebook",
       "shortType": "Facebook",
       "emoji": "📘",
-      "actionTitle": "Pobierz nowe komentarze",
-      "toolName": "Facebook API",
+      "tileTitle": "Pobierz komentarze",
+      "popupTitle": "Facebook API",
+      "popupDescription": "Łączy się z Facebook Graph API i pobiera wszystkie nowe komentarze pod wybranym postem.",
       "x": 550,
       "y": 350,
       "color": "#4ecdc4"
@@ -79,6 +81,11 @@ FORMAT ODPOWIEDZI (TYLKO CZYSTY JSON):
   ]
 }
 
+POLA NODES:
+- tileTitle: Krótki tytuł wyświetlany na kafelku (2-4 słowa, np. "Pobierz komentarze")
+- popupTitle: Tytuł w chmurce informacyjnej (2-3 słowa, np. "Facebook API")
+- popupDescription: Opis w pop-upie (1-2 zdania, co dokładnie robi ten krok)
+
 KOLORY NODES (losuj z palety):
 ["#ff6b6b", "#4ecdc4", "#feca57", "#9b59b6", "#3498db", "#e74c3c", "#2ecc71", "#f39c12"]
 
@@ -86,11 +93,13 @@ WAŻNE:
 - Odpowiedz TYLKO czystym JSON bez \`\`\`json
 - "name" node'a musi być unikalny
 - edges łączą nodes po "name"
-- actionTitle: krótki opis CO robi (np. "Pobierz nowe komentarze")
-- toolName: nazwa narzędzia (np. "Facebook API", "OpenAI", "Airtable")
+- tileTitle: tytuł na kafelku (2-4 słowa)
+- popupTitle: tytuł pop-upu (2-3 słowa)
+- popupDescription: opis (1-2 zdania)
 - Każdy node musi mieć emoji
 - Slalom: co drugi node zmienia y (góra/dół/środek)
-- Workflow od LEWEJ do PRAWEJ`
+- Workflow od LEWEJ do PRAWEJ
+- WSZYSTKO PO POLSKU`
 }
 
 /**

@@ -60,7 +60,7 @@ export async function generateAudio(text, apiKey, voiceId, outputPath) {
   }
 }
 
-// Generuj audio dla każdego segmentu narracji
+// Generuj audio dla każdego segmentu narracji (zwraca base64 dla podglądu)
 export async function generateSegmentedAudio(segments, apiKey, voiceId, outputDir) {
   const results = []
 
@@ -71,13 +71,16 @@ export async function generateSegmentedAudio(segments, apiKey, voiceId, outputDi
     const filename = `segment_${i.toString().padStart(3, '0')}_${segment.type}.mp3`
     const outputPath = join(outputDir, filename)
 
-    const result = await generateAudio(segment.text, apiKey, voiceId, outputPath)
+    // Generuj audio i zapisz do pliku
+    const result = await generateAudioWithBase64(segment.text, apiKey, voiceId, outputPath)
 
     if (result.success) {
       results.push({
         ...segment,
         audioPath: outputPath,
-        audioSize: result.size
+        audioSize: result.size,
+        audio: result.base64, // base64 dla podglądu w przeglądarce
+        duration: result.duration
       })
     } else {
       console.error(`[ElevenLabs] Failed to generate segment ${i}: ${result.error}`)
@@ -88,6 +91,69 @@ export async function generateSegmentedAudio(segments, apiKey, voiceId, outputDi
   }
 
   return results
+}
+
+// Generuj audio i zwróć też base64
+async function generateAudioWithBase64(text, apiKey, voiceId, outputPath) {
+  try {
+    const cleanVoiceId = voiceId.trim()
+    const cleanApiKey = apiKey.trim()
+
+    console.log(`[ElevenLabs] Generating audio for text: "${text.substring(0, 50)}..."`)
+    console.log(`[ElevenLabs] Voice ID: "${cleanVoiceId}"`)
+
+    const response = await fetch(`${ELEVENLABS_API_URL}/text-to-speech/${cleanVoiceId}`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'audio/mpeg',
+        'Content-Type': 'application/json',
+        'xi-api-key': cleanApiKey
+      },
+      body: JSON.stringify({
+        text: text,
+        model_id: 'eleven_multilingual_v2',
+        voice_settings: {
+          stability: 0.5,
+          similarity_boost: 0.75,
+          style: 0.3,
+          use_speaker_boost: true
+        }
+      })
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      throw new Error(`ElevenLabs API error: ${response.status} - ${errorText}`)
+    }
+
+    const audioBuffer = await response.arrayBuffer()
+    const buffer = Buffer.from(audioBuffer)
+
+    // Zapisz do pliku
+    writeFileSync(outputPath, buffer)
+
+    // Konwertuj na base64
+    const base64 = buffer.toString('base64')
+
+    // Oszacuj czas trwania (przybliżenie: ~12KB/s dla MP3 128kbps)
+    const duration = Math.round((audioBuffer.byteLength / 12000) * 1000)
+
+    console.log(`[ElevenLabs] Audio saved to: ${outputPath}`)
+
+    return {
+      success: true,
+      path: outputPath,
+      size: audioBuffer.byteLength,
+      base64: base64,
+      duration: duration
+    }
+  } catch (error) {
+    console.error('[ElevenLabs] Error:', error)
+    return {
+      success: false,
+      error: error.message
+    }
+  }
 }
 
 // Generuj jedno długie audio dla całej narracji
