@@ -365,8 +365,10 @@ let lastCleanAudioPath = null
 
 // Eksport wideo + ekstrakcja audio (generuje oba naraz)
 // Zwraca JSON z info o plikach (użytkownik może pobrać oba)
-// WAŻNE: Audio jest CZYSTE (tylko voiceover, BEZ efektów dźwiękowych SFX)
-// Efekty dźwiękowe (whoosh, pop) są TYLKO w wideo
+// WAŻNE:
+// - Wideo do pobrania = pełne (voiceover + SFX)
+// - Wideo do montażu z awatarem = tylko SFX (bez voiceover)
+// - Audio do pobrania = czyste voiceover (do HeyGen)
 app.post('/api/export-with-audio-extract', async (req, res) => {
   try {
     const { workflow, settings, audioSegments } = req.body
@@ -379,22 +381,30 @@ app.post('/api/export-with-audio-extract', async (req, res) => {
       return res.status(400).json({ error: 'Audio data required' })
     }
 
-    console.log(`[Export+Audio] Rendering video...`)
+    console.log(`[Export+Audio] Rendering videos...`)
 
-    // Renderuj wideo - teraz zwraca { videoPath, cleanAudioPath }
-    const result = await renderNarratedVideo(workflow, settings, audioSegments)
-    const videoPath = typeof result === 'string' ? result : result.videoPath
-    const cleanAudioPath = typeof result === 'string' ? null : result.cleanAudioPath
+    // 1. Renderuj wideo PEŁNE (voiceover + SFX) - do pobrania
+    console.log(`[Export+Audio] Rendering full video (voiceover + SFX)...`)
+    const fullResult = await renderNarratedVideo(workflow, settings, audioSegments, { sfxOnly: false })
+    const fullVideoPath = typeof fullResult === 'string' ? fullResult : fullResult.videoPath
+    const cleanAudioPath = typeof fullResult === 'string' ? null : fullResult.cleanAudioPath
 
-    lastRenderedVideoPath = videoPath
-    console.log(`[Export+Audio] Video rendered: ${videoPath}`)
+    console.log(`[Export+Audio] Full video rendered: ${fullVideoPath}`)
 
-    // Użyj czystego audio (bez SFX) zamiast ekstrakcji z wideo
+    // 2. Renderuj wideo SFX-ONLY (tylko efekty dźwiękowe) - do montażu z awatarem
+    console.log(`[Export+Audio] Rendering SFX-only video (for avatar montage)...`)
+    const sfxResult = await renderNarratedVideo(workflow, settings, audioSegments, { sfxOnly: true })
+    const sfxVideoPath = typeof sfxResult === 'string' ? sfxResult : sfxResult.videoPath
+
+    // Zapisz ścieżkę do wideo SFX-only (będzie użyte przy montażu awatara)
+    lastRenderedVideoPath = sfxVideoPath
+    console.log(`[Export+Audio] SFX-only video rendered: ${sfxVideoPath}`)
+
+    // Użyj czystego audio (bez SFX)
     let audioPath = cleanAudioPath
     if (!audioPath || !existsSync(audioPath)) {
-      // Fallback: ekstraktuj z wideo jeśli brak cleanAudioPath
       console.log(`[Export+Audio] Clean audio not available, extracting from video...`)
-      audioPath = await extractAudioFromVideo(videoPath, audioDir)
+      audioPath = await extractAudioFromVideo(fullVideoPath, audioDir)
     } else {
       console.log(`[Export+Audio] Using clean audio (no SFX): ${audioPath}`)
     }
@@ -402,14 +412,16 @@ app.post('/api/export-with-audio-extract', async (req, res) => {
     lastCleanAudioPath = audioPath
     console.log(`[Export+Audio] Audio ready: ${audioPath}`)
 
-    // Zwróć info o obu plikach
+    // Zwróć info o plikach - wideo pełne do pobrania, ale montaż używa SFX-only
     res.json({
       success: true,
-      videoPath,
-      videoFileName: videoPath.split('/').pop(),
+      videoPath: fullVideoPath,           // Pełne wideo do pobrania
+      videoFileName: fullVideoPath.split('/').pop(),
+      sfxVideoPath: sfxVideoPath,         // SFX-only do montażu z awatarem
+      sfxVideoFileName: sfxVideoPath.split('/').pop(),
       audioPath,
       audioFileName: audioPath.split('/').pop(),
-      audioIsClean: cleanAudioPath && existsSync(cleanAudioPath) // Info że audio jest bez SFX
+      audioIsClean: cleanAudioPath && existsSync(cleanAudioPath)
     })
   } catch (error) {
     console.error('[Export+Audio] Error:', error)
@@ -595,45 +607,63 @@ async function extractAudioFromVideo(videoPath, outputDir) {
 }
 
 // Połącz wideo z uploadowanym awatarem (overlay w lewym dolnym rogu)
-// UWAGA: Audio pozostaje z głównego wideo (nie duplikujemy)
+// WAŻNE: Audio pochodzi z AWATARA (voiceover), SFX z głównego wideo są MIKSOWANE
 async function combineVideoWithUploadedAvatar(mainVideoPath, avatarVideoPath, outputDir) {
   const { spawn } = await import('child_process')
 
   const outputPath = join(outputDir, `final_${Date.now()}.mp4`)
 
   console.log(`[CombineVideo] Combining videos with uploaded avatar...`)
+  console.log(`[CombineVideo] Main video (SFX): ${mainVideoPath}`)
+  console.log(`[CombineVideo] Avatar (voiceover): ${avatarVideoPath}`)
 
   // Ustawienia awatara - ULEPSZONE
   const avatarScale = 0.30        // 30% szerokości (zwiększone z 25%)
   const margin = 40               // 40px margines (zwiększone z 20px)
+  const cornerRadius = 16         // Promień zaokrąglenia rogów
 
   // Pozycja awatara: lewy dolny róg z większym marginesem
   const overlayPosition = `${margin}:H-h-${margin}`
 
   return new Promise((resolve, reject) => {
-    // FFmpeg command - UPROSZCZONY dla kompatybilności z QuickTime:
-    // 1. Weź główne wideo (z audio)
-    // 2. Weź awatara, przeskaluj do 30% i usuń zielone tło (chroma key)
-    // 3. Overlay awatara na głównym wideo
-    // 4. ZACHOWAJ audio z głównego wideo (nie z awatara!)
-    // 5. Wymuś yuv420p dla kompatybilności z QuickTime
+    // FFmpeg command:
+    // 1. Weź główne wideo (z SFX) i awatara (z voiceover)
+    // 2. Przeskaluj awatara, usuń zielone tło
+    // 3. Dodaj zaokrąglone rogi i efekt glow
+    // 4. Overlay awatara na głównym wideo
+    // 5. MIKSUJ audio: SFX z głównego wideo + voiceover z awatara
     const ffmpeg = spawn('ffmpeg', [
       '-y',
-      '-i', mainVideoPath,      // Input 0: główne wideo (z audio)
-      '-i', avatarVideoPath,    // Input 1: awatar (ignorujemy jego audio)
+      '-i', mainVideoPath,      // Input 0: główne wideo (z SFX)
+      '-i', avatarVideoPath,    // Input 1: awatar (z voiceover)
       '-filter_complex',
-      // 1. Przeskaluj awatara do 30% szerokości głównego wideo
+      // === VIDEO ===
+      // 1. Przeskaluj awatara do 30% szerokości
       `[1:v]scale=iw*${avatarScale}:-1[scaled];` +
-      // 2. Usuń zielone tło (chroma key) - lepsze parametry
+      // 2. Usuń zielone tło (chroma key)
       `[scaled]chromakey=0x00FF00:0.25:0.08[keyed];` +
-      // 3. Overlay awatara na głównym wideo
-      `[0:v][keyed]overlay=${overlayPosition}:format=auto,format=yuv420p[outv]`,
+      // 3. Dodaj zaokrąglone rogi - użyj roundrect (prostsze niż geq)
+      `[keyed]format=rgba,` +
+      `geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':` +
+      `a='if(lt(hypot(min(X,W-X)-${cornerRadius},min(Y,H-Y)-${cornerRadius}),${cornerRadius})*` +
+      `lt(min(X,W-X),${cornerRadius})*lt(min(Y,H-Y),${cornerRadius}),0,alpha(X,Y))'[rounded];` +
+      // 4. Glow effect - lekki blur pod awatarem
+      `[rounded]split[avatar][forglow];` +
+      `[forglow]gblur=sigma=6,colorchannelmixer=aa=0.3[glow];` +
+      `[glow][avatar]overlay=0:0:format=auto[avatar_glow];` +
+      // 5. Overlay awatara na głównym wideo
+      `[0:v][avatar_glow]overlay=${overlayPosition}:format=auto,format=yuv420p[outv];` +
+      // === AUDIO ===
+      // 6. Miksuj SFX (główne wideo) + voiceover (awatar)
+      `[0:a]volume=1.0[sfx];` +
+      `[1:a]volume=1.0[voice];` +
+      `[sfx][voice]amix=inputs=2:duration=longest:normalize=0[aout]`,
       '-map', '[outv]',         // Użyj połączonego wideo
-      '-map', '0:a',            // Użyj audio z GŁÓWNEGO wideo (0) - nie z awatara!
+      '-map', '[aout]',         // Użyj zmiksowanego audio (SFX + voiceover)
       '-c:v', 'libx264',
       '-preset', 'fast',
       '-crf', '23',
-      '-pix_fmt', 'yuv420p',    // KRYTYCZNE: Wymusza format kompatybilny z QuickTime
+      '-pix_fmt', 'yuv420p',    // Kompatybilność z QuickTime
       '-c:a', 'aac',
       '-b:a', '192k',
       '-shortest',              // Zakończ gdy krótsze wideo się skończy

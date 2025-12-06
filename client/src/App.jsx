@@ -296,11 +296,32 @@ function App() {
     setStatusType('')
 
     try {
+      // Połącz workflow z edytowanymi danymi z workflowSteps
+      // WAŻNE: NIE zmieniamy node.name bo jest używane wewnętrznie do linkowania!
+      // Zamiast tego dodajemy displayName i displayShortType
+      const enrichedWorkflow = {
+        ...workflow,
+        nodes: workflow.nodes.map((node, index) => {
+          // Szukaj po indeksie (bardziej niezawodne) lub po ID
+          const step = workflowSteps?.[index] || workflowSteps?.find(s => s.id === node.id || s.name === node.name)
+          if (step) {
+            return {
+              ...node,
+              // Zachowuj oryginalne name do wewnętrznego użytku
+              // Dodaj displayName i shortType dla wyświetlania
+              displayName: step.tileTitle && step.tileTitle.trim() ? step.tileTitle : node.name,
+              shortType: step.tileSubtitle && step.tileSubtitle.trim() ? step.tileSubtitle : (step.type || node.shortType)
+            }
+          }
+          return node
+        })
+      }
+
       const response = await fetch('/api/export-with-audio-extract', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          workflow,
+          workflow: enrichedWorkflow,
           settings,
           audioSegments
         })

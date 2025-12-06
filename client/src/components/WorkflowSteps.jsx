@@ -133,6 +133,21 @@ function WorkflowSteps({ steps, onChange }) {
             />
           </div>
 
+          {/* Podtytuł kafelka workflow (typ/kategoria) */}
+          <div style={styles.section}>
+            <div style={styles.sectionTitle}>Podtytuł kafelka</div>
+            <input
+              type="text"
+              style={styles.input}
+              value={step.tileSubtitle || step.type || ''}
+              onChange={(e) => handleStepChange(index, 'tileSubtitle', e.target.value)}
+              placeholder={`np. "${step.type}" lub własny opis`}
+            />
+            <div style={{ fontSize: '0.7rem', color: '#666', marginTop: '4px' }}>
+              Wyświetlany pod tytułem kafelka w animacji (np. "Trigger", "HTTP Request")
+            </div>
+          </div>
+
           {/* Sekcja pop-upu informacyjnego */}
           <div style={styles.popupSection}>
             <div style={styles.popupSectionTitle}>
