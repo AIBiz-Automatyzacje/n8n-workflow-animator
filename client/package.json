@@ -1,0 +1,14 @@
+{
+  "name": "n8n-workflow-animator-client",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "konva": "^9.2.3",
+    "react-konva": "^18.2.10",
+    "react-dropzone": "^14.2.3",
+    "dagre": "^0.8.5"
+  }
+}
