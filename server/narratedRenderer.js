@@ -1054,6 +1054,7 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
 // Glowna funkcja renderowania
 // Zwraca obiekt { videoPath, cleanAudioPath } - cleanAudioPath to czyste audio bez SFX
 // options.sfxOnly = true -> generuje wideo TYLKO z SFX (bez voiceover) - do montażu z awatarem
+// options.voiceoverOnly = true -> generuje wideo TYLKO z voiceover (bez SFX) - do ekstrakcji czystego audio
 export async function renderNarratedVideo(workflow, settings, audioData, options = {}) {
   const outputDir = join(__dirname, '..', 'output')
   const framesDir = join(outputDir, 'frames')
@@ -1066,6 +1067,7 @@ export async function renderNarratedVideo(workflow, settings, audioData, options
   const isVertical = settings.aspectRatio === '9:16'
   const fps = 30
   const sfxOnly = options.sfxOnly || false
+  const voiceoverOnly = options.voiceoverOnly || false
 
   // KRYTYCZNE: Przelicz layout na LINIE PROSTA przed renderowaniem!
   recalculateLayout(workflow, isVertical)
@@ -1097,6 +1099,7 @@ export async function renderNarratedVideo(workflow, settings, audioData, options
   console.log('[NarratedRenderer] Total duration:', totalDuration, 'ms')
   console.log('[NarratedRenderer] Clean audio path:', cleanAudioPath)
   console.log('[NarratedRenderer] SFX only mode:', sfxOnly)
+  console.log('[NarratedRenderer] Voiceover only mode:', voiceoverOnly)
 
   console.log('[NarratedRenderer] Launching browser...')
   const browser = await puppeteer.launch({
@@ -1140,7 +1143,8 @@ export async function renderNarratedVideo(workflow, settings, audioData, options
 
   // Koduj z audio - przekaż singleAudioPath jeśli używamy SSML
   // Jeśli sfxOnly=true, generujemy wideo TYLKO z SFX (bez voiceover)
-  await encodeNarratedVideo(framesDir, outputPath, fps, timeline, singleAudioPath, sfxOnly)
+  // Jeśli voiceoverOnly=true, generujemy wideo TYLKO z voiceover (bez SFX)
+  await encodeNarratedVideo(framesDir, outputPath, fps, timeline, singleAudioPath, sfxOnly, voiceoverOnly)
 
   rmSync(framesDir, { recursive: true })
 
@@ -1198,12 +1202,15 @@ async function mergeCleanAudioSegments(segments, outputDir) {
   writeFileSync(listPath, listContent)
 
   return new Promise((resolve, reject) => {
+    // Użyj re-encoding zamiast copy - copy powoduje problemy z nagłówkami MP3
     const ffmpeg = spawn('ffmpeg', [
       '-y',
       '-f', 'concat',
       '-safe', '0',
       '-i', listPath,
-      '-c', 'copy',
+      '-c:a', 'libmp3lame',
+      '-b:a', '192k',
+      '-ar', '44100',
       outputPath
     ])
 
@@ -1229,9 +1236,118 @@ async function mergeCleanAudioSegments(segments, outputDir) {
 
 // Koduj wideo z audio zsynchronizowanym do timeline
 // sfxOnly = true -> generuje wideo TYLKO z SFX (bez voiceover) - do montażu z awatarem
-async function encodeNarratedVideo(framesDir, outputPath, fps, timeline, singleAudioPath = null, sfxOnly = false) {
+// voiceoverOnly = true -> generuje wideo TYLKO z voiceover (bez SFX) - do ekstrakcji czystego audio
+async function encodeNarratedVideo(framesDir, outputPath, fps, timeline, singleAudioPath = null, sfxOnly = false, voiceoverOnly = false) {
   // Zbierz tylko SFX (whoosh i pop)
   const sfxPhases = timeline.filter(p => p.sfxPath && existsSync(p.sfxPath))
+
+  // === TRYB VOICEOVER ONLY (do ekstrakcji czystego audio bez SFX) ===
+  if (voiceoverOnly) {
+    console.log('[NarratedRenderer] VOICEOVER ONLY mode - encoding without SFX')
+
+    if (singleAudioPath && existsSync(singleAudioPath)) {
+      // Użyj SSML audio - tylko voiceover bez SFX
+      return new Promise((resolve, reject) => {
+        const ffmpeg = spawn('ffmpeg', [
+          '-y',
+          '-framerate', String(fps),
+          '-i', join(framesDir, 'frame_%05d.png'),
+          '-i', singleAudioPath,
+          '-map', '0:v',
+          '-map', '1:a',
+          '-c:v', 'libx264',
+          '-c:a', 'aac',
+          '-b:a', '192k',
+          '-pix_fmt', 'yuv420p',
+          '-preset', 'medium',
+          '-crf', '18',
+          '-shortest',
+          outputPath
+        ])
+
+        ffmpeg.stderr.on('data', (data) => {
+          const msg = data.toString()
+          if (msg.includes('frame=')) {
+            process.stdout.write(`\r[NarratedRenderer] ${msg.trim().split('\n').pop()}`)
+          }
+        })
+
+        ffmpeg.on('close', (code) => {
+          console.log('')
+          if (code === 0) {
+            console.log('[NarratedRenderer] Voiceover-only encoding complete!')
+            resolve(outputPath)
+          } else {
+            reject(new Error(`FFmpeg exited with code ${code}`))
+          }
+        })
+
+        ffmpeg.on('error', reject)
+      })
+    } else {
+      // Brak SSML - użyj segmentów audio (tylko narracja)
+      const voicePhases = timeline.filter(p => p.audioPath && existsSync(p.audioPath))
+
+      if (voicePhases.length === 0) {
+        console.log('[NarratedRenderer] No voiceover found, encoding without sound')
+        return encodeVideoWithoutAudio(framesDir, outputPath, fps)
+      }
+
+      const filterParts = []
+      const inputArgs = []
+
+      voicePhases.forEach((phase, index) => {
+        inputArgs.push('-i', phase.audioPath)
+        const inputIndex = index + 1
+        const delayMs = Math.max(0, phase.startTime || 0)
+        filterParts.push(`[${inputIndex}:a]adelay=${delayMs}|${delayMs},volume=1.0[a${index}]`)
+      })
+
+      const mixInputs = Array.from({ length: voicePhases.length }, (_, i) => `[a${i}]`).join('')
+      const filterComplex = filterParts.join(';') + `;${mixInputs}amix=inputs=${voicePhases.length}:duration=longest:normalize=0[aout]`
+
+      const ffmpegArgs = [
+        '-y',
+        '-framerate', String(fps),
+        '-i', join(framesDir, 'frame_%05d.png'),
+        ...inputArgs,
+        '-filter_complex', filterComplex,
+        '-map', '0:v',
+        '-map', '[aout]',
+        '-c:v', 'libx264',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-pix_fmt', 'yuv420p',
+        '-preset', 'medium',
+        '-crf', '18',
+        '-shortest',
+        outputPath
+      ]
+
+      return new Promise((resolve, reject) => {
+        const ffmpeg = spawn('ffmpeg', ffmpegArgs)
+
+        ffmpeg.stderr.on('data', (data) => {
+          const msg = data.toString()
+          if (msg.includes('frame=')) {
+            process.stdout.write(`\r[NarratedRenderer] ${msg.trim().split('\n').pop()}`)
+          }
+        })
+
+        ffmpeg.on('close', (code) => {
+          console.log('')
+          if (code === 0) {
+            console.log('[NarratedRenderer] Voiceover-only encoding complete!')
+            resolve(outputPath)
+          } else {
+            reject(new Error(`FFmpeg exited with code ${code}`))
+          }
+        })
+
+        ffmpeg.on('error', reject)
+      })
+    }
+  }
 
   // === TRYB SFX ONLY (do montażu z awatarem) ===
   if (sfxOnly) {
