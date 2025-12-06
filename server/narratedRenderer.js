@@ -663,10 +663,10 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
       }
       if (currentLine) lines.push(currentLine);
 
-      // Max 4 linie
-      if (lines.length > 4) {
-        lines.length = 4;
-        lines[3] = lines[3].substring(0, maxCharsPerLine - 3) + '...';
+      // Max 5 linii (zwiększone z 4)
+      if (lines.length > 5) {
+        lines.length = 5;
+        lines[4] = lines[4].substring(0, maxCharsPerLine - 3) + '...';
       }
 
       return lines;
@@ -679,25 +679,34 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
       const nodePos = nodePositions.find(n => n.name === nodeName);
       if (!nodePos) return;
 
-      // Dynamiczne dopasowanie szerokosci do tytulu
+      // Równomierne paddingi
+      const padding = 20;
+      const emojiSize = 42;
+      const emojiMargin = 15;
+      const contentStartX = padding + emojiSize + emojiMargin;
+
+      // Szerszy popup (zwiększone wartości)
       const titleLength = (title || nodeName).length;
-      const minWidth = 300;
-      const maxWidth = 450;
+      const minWidth = 380;   // Zwiększone z 300
+      const maxWidth = 520;   // Zwiększone z 450
       const charWidth = 9;
-      const titleWidth = titleLength * charWidth + 90;
+      const titleWidth = titleLength * charWidth + contentStartX + padding;
       const boxWidth = Math.min(maxWidth, Math.max(minWidth, titleWidth));
 
-      // Oblicz max znakow na linie
-      const maxCharsPerLine = Math.floor((boxWidth - 80) / 7);
+      // Oblicz max znakow na linie - więcej miejsca
+      const maxCharsPerLine = Math.floor((boxWidth - contentStartX - padding) / 7);
       const lines = wrapText(text, maxCharsPerLine);
       const numLines = lines.length || 1;
 
-      // Dynamiczna wysokosc
+      // Dynamiczna wysokosc z równymi paddingami
       const hasType = typePLText && typePLText.length > 0;
-      const boxHeight = 30 + (hasType ? 20 : 0) + (numLines * 20) + 45;
+      const titleHeight = 22;
+      const typeHeight = hasType ? 18 : 0;
+      const lineHeight = 20;
+      const boxHeight = padding + titleHeight + typeHeight + (numLines * lineHeight) + padding;
 
-      // Pozycja popup - ZAWSZE NAD node'em
-      const popupY = nodePos.nodeY - boxHeight - 35;
+      // Pozycja popup - ZAWSZE NAD node'em (mniejszy margines)
+      const popupY = nodePos.nodeY - boxHeight - 25;
       const arrowY1 = popupY + boxHeight;
       const arrowY2 = nodePos.nodeY - 5;
       const popupX = nodePos.nodeX + nodeWidth / 2 - boxWidth / 2;
@@ -736,19 +745,22 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
       bg.setAttribute('stroke-width', '3');
       boxGroup.appendChild(bg);
 
-      // Emoji
+      // Emoji - wycentrowane w pionie
+      const emojiCenterY = padding + (titleHeight + typeHeight + numLines * lineHeight) / 2 + 10;
       const emojiText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      emojiText.setAttribute('x', '25');
-      emojiText.setAttribute('y', '50');
+      emojiText.setAttribute('x', String(padding + emojiSize / 2));
+      emojiText.setAttribute('y', String(emojiCenterY));
       emojiText.setAttribute('font-size', '36');
+      emojiText.setAttribute('text-anchor', 'middle');
       emojiText.setAttribute('font-family', 'Apple Color Emoji, Segoe UI Emoji, sans-serif');
       emojiText.textContent = emoji || '🔧';
       boxGroup.appendChild(emojiText);
 
-      // Title
+      // Title - z paddingiem
+      const titleY = padding + 18;
       const titleText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      titleText.setAttribute('x', '75');
-      titleText.setAttribute('y', '32');
+      titleText.setAttribute('x', String(contentStartX));
+      titleText.setAttribute('y', String(titleY));
       titleText.setAttribute('fill', '#ff6b6b');
       titleText.setAttribute('font-size', '16');
       titleText.setAttribute('font-weight', 'bold');
@@ -757,10 +769,12 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
       boxGroup.appendChild(titleText);
 
       // Type (jeśli jest)
+      let currentY = titleY;
       if (hasType) {
+        currentY += typeHeight;
         const typeText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        typeText.setAttribute('x', '75');
-        typeText.setAttribute('y', '50');
+        typeText.setAttribute('x', String(contentStartX));
+        typeText.setAttribute('y', String(currentY));
         typeText.setAttribute('fill', '#999999');
         typeText.setAttribute('font-size', '12');
         typeText.setAttribute('font-style', 'italic');
@@ -769,18 +783,19 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
         boxGroup.appendChild(typeText);
       }
 
-      // Description lines
+      // Description lines - z paddingiem
+      currentY += lineHeight + 5;
       const descText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      descText.setAttribute('x', '75');
-      descText.setAttribute('y', hasType ? 75 : 65);
+      descText.setAttribute('x', String(contentStartX));
+      descText.setAttribute('y', String(currentY));
       descText.setAttribute('fill', '#dddddd');
       descText.setAttribute('font-size', '14');
       descText.setAttribute('font-family', 'Inter, system-ui, sans-serif');
 
       lines.forEach((line, i) => {
         const tspan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
-        tspan.setAttribute('x', '75');
-        tspan.setAttribute('dy', i === 0 ? '0' : '20');
+        tspan.setAttribute('x', String(contentStartX));
+        tspan.setAttribute('dy', i === 0 ? '0' : String(lineHeight));
         tspan.textContent = line;
         descText.appendChild(tspan);
       });
@@ -961,6 +976,7 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
 }
 
 // Glowna funkcja renderowania
+// Zwraca obiekt { videoPath, cleanAudioPath } - cleanAudioPath to czyste audio bez SFX
 export async function renderNarratedVideo(workflow, settings, audioData) {
   const outputDir = join(__dirname, '..', 'output')
   const framesDir = join(outputDir, 'frames')
@@ -976,7 +992,7 @@ export async function renderNarratedVideo(workflow, settings, audioData) {
   // KRYTYCZNE: Przelicz layout na LINIE PROSTA przed renderowaniem!
   recalculateLayout(workflow, isVertical)
 
-  let timeline, totalDuration, singleAudioPath = null
+  let timeline, totalDuration, singleAudioPath = null, cleanAudioPath = null
 
   // Sprawdź czy mamy SSML audio czy osobne segmenty
   if (audioData.ssmlUsed && audioData.audioPath) {
@@ -986,16 +1002,22 @@ export async function renderNarratedVideo(workflow, settings, audioData) {
     timeline = result.timeline
     totalDuration = result.totalDuration
     singleAudioPath = result.singleAudioPath
+    // SSML audio jest już czyste (bez SFX)
+    cleanAudioPath = audioData.audioPath
   } else {
     // Stara metoda - osobne segmenty
     console.log('[NarratedRenderer] Using segmented audio')
     const result = await calculateNarratedTiming(workflow, audioData.segments || audioData, settings)
     timeline = result.timeline
     totalDuration = result.totalDuration
+
+    // Dla segmentów - połącz je w jedno czyste audio (bez SFX)
+    cleanAudioPath = await mergeCleanAudioSegments(audioData.segments || audioData, outputDir)
   }
 
   console.log('[NarratedRenderer] Timeline phases:', timeline.length)
   console.log('[NarratedRenderer] Total duration:', totalDuration, 'ms')
+  console.log('[NarratedRenderer] Clean audio path:', cleanAudioPath)
 
   console.log('[NarratedRenderer] Launching browser...')
   const browser = await puppeteer.launch({
@@ -1042,7 +1064,87 @@ export async function renderNarratedVideo(workflow, settings, audioData) {
 
   rmSync(framesDir, { recursive: true })
 
-  return outputPath
+  // Zwróć obiekt z obiema ścieżkami
+  return { videoPath: outputPath, cleanAudioPath }
+}
+
+// Połącz segmenty audio w jedno czyste audio (BEZ SFX)
+async function mergeCleanAudioSegments(segments, outputDir) {
+  if (!segments || segments.length === 0) {
+    console.log('[MergeCleanAudio] No segments to merge')
+    return null
+  }
+
+  // Zbierz ścieżki audio (tylko narracja, bez SFX)
+  const audioPaths = []
+
+  // Intro
+  const intro = segments.find(s => s.type === 'intro')
+  if (intro?.audioPath && existsSync(intro.audioPath)) {
+    audioPaths.push(intro.audioPath)
+  } else if (intro?.path && existsSync(intro.path)) {
+    audioPaths.push(intro.path)
+  }
+
+  // Node segments
+  const nodeSegments = segments.filter(s => s.type === 'node')
+  for (const seg of nodeSegments) {
+    if (seg.audioPath && existsSync(seg.audioPath)) {
+      audioPaths.push(seg.audioPath)
+    } else if (seg.path && existsSync(seg.path)) {
+      audioPaths.push(seg.path)
+    }
+  }
+
+  // Outro
+  const outro = segments.find(s => s.type === 'outro')
+  if (outro?.audioPath && existsSync(outro.audioPath)) {
+    audioPaths.push(outro.audioPath)
+  } else if (outro?.path && existsSync(outro.path)) {
+    audioPaths.push(outro.path)
+  }
+
+  if (audioPaths.length === 0) {
+    console.log('[MergeCleanAudio] No valid audio files found')
+    return null
+  }
+
+  console.log(`[MergeCleanAudio] Merging ${audioPaths.length} clean audio segments...`)
+
+  // Użyj FFmpeg concat do połączenia
+  const outputPath = join(outputDir, `clean_audio_${Date.now()}.mp3`)
+  const listPath = join(outputDir, `clean_list_${Date.now()}.txt`)
+  const listContent = audioPaths.map(p => `file '${p}'`).join('\n')
+  writeFileSync(listPath, listContent)
+
+  return new Promise((resolve, reject) => {
+    const ffmpeg = spawn('ffmpeg', [
+      '-y',
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', listPath,
+      '-c', 'copy',
+      outputPath
+    ])
+
+    ffmpeg.on('close', (code) => {
+      // Usuń plik listy
+      try { rmSync(listPath) } catch (e) {}
+
+      if (code === 0) {
+        console.log('[MergeCleanAudio] Clean audio merged successfully:', outputPath)
+        resolve(outputPath)
+      } else {
+        console.error('[MergeCleanAudio] FFmpeg merge failed with code:', code)
+        resolve(null)
+      }
+    })
+
+    ffmpeg.on('error', (err) => {
+      console.error('[MergeCleanAudio] FFmpeg error:', err)
+      resolve(null)
+    })
+  })
 }
 
 // Koduj wideo z audio zsynchronizowanym do timeline

@@ -340,7 +340,9 @@ app.post('/api/export-narrated', async (req, res) => {
       console.log(`[Export Narrated] SSML audio path: ${audioSegments.audioPath}`)
     }
 
-    const videoPath = await renderNarratedVideo(workflow, settings, audioSegments)
+    // renderNarratedVideo teraz zwraca obiekt { videoPath, cleanAudioPath }
+    const result = await renderNarratedVideo(workflow, settings, audioSegments)
+    const videoPath = typeof result === 'string' ? result : result.videoPath
 
     console.log(`[Export Narrated] Video ready: ${videoPath}`)
 
@@ -359,10 +361,12 @@ app.post('/api/export-narrated', async (req, res) => {
 
 // Przechowuj ostatnio renderowane wideo (ścieżka) i wyciągnięte audio
 let lastRenderedVideoPath = null
-let lastExtractedAudioPath = null
+let lastCleanAudioPath = null
 
 // Eksport wideo + ekstrakcja audio (generuje oba naraz)
 // Zwraca JSON z info o plikach (użytkownik może pobrać oba)
+// WAŻNE: Audio jest CZYSTE (tylko voiceover, BEZ efektów dźwiękowych SFX)
+// Efekty dźwiękowe (whoosh, pop) są TYLKO w wideo
 app.post('/api/export-with-audio-extract', async (req, res) => {
   try {
     const { workflow, settings, audioSegments } = req.body
@@ -377,16 +381,26 @@ app.post('/api/export-with-audio-extract', async (req, res) => {
 
     console.log(`[Export+Audio] Rendering video...`)
 
-    // Renderuj wideo
-    const videoPath = await renderNarratedVideo(workflow, settings, audioSegments)
+    // Renderuj wideo - teraz zwraca { videoPath, cleanAudioPath }
+    const result = await renderNarratedVideo(workflow, settings, audioSegments)
+    const videoPath = typeof result === 'string' ? result : result.videoPath
+    const cleanAudioPath = typeof result === 'string' ? null : result.cleanAudioPath
+
     lastRenderedVideoPath = videoPath
     console.log(`[Export+Audio] Video rendered: ${videoPath}`)
 
-    // Wyciągnij audio
-    console.log(`[Export+Audio] Extracting audio...`)
-    const audioPath = await extractAudioFromVideo(videoPath, audioDir)
-    lastExtractedAudioPath = audioPath
-    console.log(`[Export+Audio] Audio extracted: ${audioPath}`)
+    // Użyj czystego audio (bez SFX) zamiast ekstrakcji z wideo
+    let audioPath = cleanAudioPath
+    if (!audioPath || !existsSync(audioPath)) {
+      // Fallback: ekstraktuj z wideo jeśli brak cleanAudioPath
+      console.log(`[Export+Audio] Clean audio not available, extracting from video...`)
+      audioPath = await extractAudioFromVideo(videoPath, audioDir)
+    } else {
+      console.log(`[Export+Audio] Using clean audio (no SFX): ${audioPath}`)
+    }
+
+    lastCleanAudioPath = audioPath
+    console.log(`[Export+Audio] Audio ready: ${audioPath}`)
 
     // Zwróć info o obu plikach
     res.json({
@@ -394,7 +408,8 @@ app.post('/api/export-with-audio-extract', async (req, res) => {
       videoPath,
       videoFileName: videoPath.split('/').pop(),
       audioPath,
-      audioFileName: audioPath.split('/').pop()
+      audioFileName: audioPath.split('/').pop(),
+      audioIsClean: cleanAudioPath && existsSync(cleanAudioPath) // Info że audio jest bez SFX
     })
   } catch (error) {
     console.error('[Export+Audio] Error:', error)
@@ -588,29 +603,37 @@ async function combineVideoWithUploadedAvatar(mainVideoPath, avatarVideoPath, ou
 
   console.log(`[CombineVideo] Combining videos with uploaded avatar...`)
 
-  // Pozycja awatara: lewy dolny róg z 20px odstępem
-  const overlayPosition = '20:H-h-20'
+  // Ustawienia awatara - ULEPSZONE
+  const avatarScale = 0.30        // 30% szerokości (zwiększone z 25%)
+  const margin = 40               // 40px margines (zwiększone z 20px)
+
+  // Pozycja awatara: lewy dolny róg z większym marginesem
+  const overlayPosition = `${margin}:H-h-${margin}`
 
   return new Promise((resolve, reject) => {
-    // FFmpeg command:
-    // 1. Weź główne wideo (z audio - ElevenLabs)
-    // 2. Weź awatara, przeskaluj do 25% i usuń zielone tło (chroma key)
+    // FFmpeg command - UPROSZCZONY dla kompatybilności z QuickTime:
+    // 1. Weź główne wideo (z audio)
+    // 2. Weź awatara, przeskaluj do 30% i usuń zielone tło (chroma key)
     // 3. Overlay awatara na głównym wideo
     // 4. ZACHOWAJ audio z głównego wideo (nie z awatara!)
+    // 5. Wymuś yuv420p dla kompatybilności z QuickTime
     const ffmpeg = spawn('ffmpeg', [
       '-y',
-      '-i', mainVideoPath,      // Input 0: główne wideo (z audio ElevenLabs)
+      '-i', mainVideoPath,      // Input 0: główne wideo (z audio)
       '-i', avatarVideoPath,    // Input 1: awatar (ignorujemy jego audio)
       '-filter_complex',
-      // Przeskaluj awatara do 25% szerokości i usuń zielone tło
-      `[1:v]scale=iw*0.25:-1,chromakey=0x00FF00:0.3:0.1[avatar];` +
-      // Overlay awatara na głównym wideo
-      `[0:v][avatar]overlay=${overlayPosition}[outv]`,
+      // 1. Przeskaluj awatara do 30% szerokości głównego wideo
+      `[1:v]scale=iw*${avatarScale}:-1[scaled];` +
+      // 2. Usuń zielone tło (chroma key) - lepsze parametry
+      `[scaled]chromakey=0x00FF00:0.25:0.08[keyed];` +
+      // 3. Overlay awatara na głównym wideo
+      `[0:v][keyed]overlay=${overlayPosition}:format=auto,format=yuv420p[outv]`,
       '-map', '[outv]',         // Użyj połączonego wideo
       '-map', '0:a',            // Użyj audio z GŁÓWNEGO wideo (0) - nie z awatara!
       '-c:v', 'libx264',
       '-preset', 'fast',
       '-crf', '23',
+      '-pix_fmt', 'yuv420p',    // KRYTYCZNE: Wymusza format kompatybilny z QuickTime
       '-c:a', 'aac',
       '-b:a', '192k',
       '-shortest',              // Zakończ gdy krótsze wideo się skończy
