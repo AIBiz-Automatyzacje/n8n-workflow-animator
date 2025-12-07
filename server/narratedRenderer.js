@@ -467,20 +467,26 @@ export async function calculateNarratedTiming(workflow, audioSegments, settings)
   }
 
   // Faza 5: CTA (scroll po skosie do brandingu z powiększeniem)
-  // Stała długość animacji: 3 sekundy (niezależnie od długości audio)
+  // Animacja trwa 3 sekundy, ale faza trwa tyle co audio (żeby nie ucinać)
   const CTA_ANIMATION_DURATION = 3000
   const ctaSegment = audioSegments?.find(s => s.type === 'cta')
   if (ctaSegment?.audioPath && existsSync(ctaSegment.audioPath)) {
+    // Pobierz długość audio CTA - video musi trwać co najmniej tyle
+    const ctaAudioDuration = await getAudioDuration(ctaSegment.audioPath)
+    // Faza trwa tyle co audio + padding, minimum 3 sekundy animacji
+    const ctaPhaseDuration = Math.max(ctaAudioDuration + 500, CTA_ANIMATION_DURATION)
+
     timeline.push({
       phase: 'cta',
       startTime: currentTime,
-      endTime: currentTime + CTA_ANIMATION_DURATION,
+      endTime: currentTime + ctaPhaseDuration,
+      animationDuration: CTA_ANIMATION_DURATION, // Animacja nadal 3s
       audioPath: ctaSegment.audioPath,
       text: ctaSegment.text,
       sfxPath: sfx.whooshPath, // Efekt dźwiękowy whoosh przy animacji CTA
       sfxType: 'whoosh'
     })
-    currentTime += CTA_ANIMATION_DURATION
+    currentTime += ctaPhaseDuration
   }
 
   // Final zoom out (tylko jeśli nie było CTA)
@@ -650,7 +656,7 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
     const [nameLine1, nameLine2] = wrapNodeText(displayName, 26)
 
     // Numer etapu zamiast emoji/ikony - biały na kolorowym tle
-    const numberHtml = `<text x="37" y="${NODE_HEIGHT / 2 + 10}" font-size="26" font-weight="bold" text-anchor="middle" fill="#ffffff" font-family="Inter, system-ui, sans-serif">${stepNumber}.</text>`
+    const numberHtml = `<text x="37" y="${NODE_HEIGHT / 2 + 10}" font-size="28" font-weight="bold" text-anchor="middle" fill="#ffffff" font-family="Inter, system-ui, sans-serif">${stepNumber}</text>`
 
     return `
       <g class="node" data-name="${node.name}" data-index="${index}" data-x="${node.x}" data-y="${node.y}" transform="translate(${node.x}, ${node.y})">
@@ -1064,8 +1070,8 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
         cameraX = startX + (endX - startX) * eased;
         cameraY = fullCenterY;
 
-        // Zoom: workflow przyblizone i czytelne (nie za daleko!)
-        cameraZoom = introZoom;
+        // Zoom: TAKI SAM jak przy pokazywaniu etapów (nodeZoom) - stały przez całe video
+        cameraZoom = nodeZoom;
 
         highlightNode('', false);
 
@@ -1078,10 +1084,10 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
         // Znajdz poprzednia pozycje
         let prevX, prevY, prevZoom;
         if (currentPhase.nodeIndex === 0) {
-          // Pierwszy node - zaczynamy z pozycji po intro scroll
+          // Pierwszy node - zaczynamy z pozycji po intro scroll (ten sam zoom)
           prevX = bounds.x + bounds.width * 0.85; // Koniec intro scroll (prawa strona)
           prevY = fullCenterY;
-          prevZoom = introZoom;
+          prevZoom = nodeZoom; // Stały zoom - bez zmiany
         } else {
           const prevNode = nodePositions[currentPhase.nodeIndex - 1];
           prevX = prevNode.x;
@@ -1139,20 +1145,22 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
 
         cameraX = startX + (endX - startX) * eased;
         cameraY = fullCenterY;
-        // Zoom taki sam jak intro - workflow czytelne
-        cameraZoom = introZoom;
+        // Zoom: STAŁY jak przy etapach (nodeZoom) - bez zmniejszania
+        cameraZoom = nodeZoom;
 
         highlightNode('', false);
 
       } else if (currentPhase.phase === 'cta') {
         // CTA: branding przesuwa się na środek i powiększa, workflow znika
-        const progress = (time - currentPhase.startTime) / (currentPhase.endTime - currentPhase.startTime);
-        const eased = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+        // Animacja trwa tylko 3 sekundy, potem branding zostaje na środku
+        const animDuration = currentPhase.animationDuration || 3000;
+        const animProgress = Math.min(1, (time - currentPhase.startTime) / animDuration);
+        const eased = animProgress < 0.5 ? 2 * animProgress * animProgress : 1 - Math.pow(-2 * animProgress + 2, 2) / 2;
 
         // Kamera - zostaje na miejscu (pierwszy node) ale przesuwamy workflow w lewo
         cameraX = bounds.x + bounds.width * 0.1;
         cameraY = fullCenterY;
-        cameraZoom = introZoom;
+        cameraZoom = nodeZoom; // Stały zoom przez całe video
 
         // Workflow przesuwa się w lewo i zanika
         const workflowOffsetX = -canvasWidth * 1.2 * eased; // Przesunięcie daleko w lewo
