@@ -73,7 +73,6 @@ function WorkflowInput({ onGenerate, isGenerating }) {
         onFocus={() => setIsFocused(true)}
         onBlur={() => setIsFocused(false)}
         onKeyDown={handleKeyDown}
-        placeholder="Opisz workflow, który chcesz zwizualizować...&#10;&#10;Przykład:&#10;Workflow automatycznie odpowiada na komentarze na Facebooku.&#10;1. Trigger: Harmonogram (co 15 minut)&#10;2. Facebook: Pobierz nowe komentarze&#10;3. OpenAI: Wygeneruj odpowiedź&#10;4. Facebook: Opublikuj odpowiedź"
         disabled={isGenerating}
       />
 
@@ -85,7 +84,7 @@ function WorkflowInput({ onGenerate, isGenerating }) {
         onClick={handleGenerate}
         disabled={!description.trim() || isGenerating}
       >
-        {isGenerating ? 'Generowanie workflow...' : 'Wygeneruj workflow'}
+        {isGenerating ? 'Parsowanie...' : 'Parsuj workflow'}
       </button>
     </div>
   )

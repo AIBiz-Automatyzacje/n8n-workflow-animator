@@ -5,7 +5,6 @@ import WorkflowSteps from './components/WorkflowSteps.jsx'
 import NarrationEditor from './components/NarrationEditor.jsx'
 import AudioPreview from './components/AudioPreview.jsx'
 import ApiKeys from './components/ApiKeys.jsx'
-import PromptsEditor from './components/PromptsEditor.jsx'
 
 const styles = {
   container: {
@@ -116,12 +115,6 @@ function App() {
   const [narration, setNarration] = useState(null)
   const [audioSegments, setAudioSegments] = useState(null)
 
-  // Prompty (customowe z etapu 0)
-  const [customPrompts, setCustomPrompts] = useState({
-    workflowPrompt: localStorage.getItem('customWorkflowPrompt') || '',
-    narrationPrompt: localStorage.getItem('customNarrationPrompt') || ''
-  })
-
   // Input narracji (gotowy tekst do parsowania)
   const [narrationInput, setNarrationInput] = useState(() => localStorage.getItem('narrationInput') || '')
 
@@ -146,17 +139,16 @@ function App() {
     voiceId: localStorage.getItem('voiceId') || '3gtL0ar0RJdNhYpZ7pNZ'
   })
 
-  // KROK 1: Generowanie workflow
-  const handleGenerateWorkflow = useCallback(async (description, context) => {
-    const { replicateApiKey } = getApiKeys()
-    if (!replicateApiKey) {
-      setStatus('Podaj Replicate API Key w sekcji Klucze API')
+  // KROK 1: Parsowanie workflow z szablonu
+  const handleGenerateWorkflow = useCallback(async (description) => {
+    if (!description.trim()) {
+      setStatus('Wklej szablon workflow')
       setStatusType('error')
       return
     }
 
     setIsGeneratingWorkflow(true)
-    setStatus('Generowanie workflow...')
+    setStatus('Parsowanie workflow...')
     setStatusType('')
 
     // Reset kolejnych kroków
@@ -165,15 +157,10 @@ function App() {
     setAudioSegments(null)
 
     try {
-      const response = await fetch('/api/generate-workflow', {
+      const response = await fetch('/api/parse-workflow', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          description,
-          context,
-          replicateApiToken: replicateApiKey,
-          customPrompt: customPrompts.workflowPrompt || undefined
-        })
+        body: JSON.stringify({ description })
       })
 
       const data = await response.json()
@@ -181,18 +168,21 @@ function App() {
       if (data.success) {
         setWorkflow(data.workflow)
 
-        // Stwórz edytowalne etapy z wygenerowanego workflow (z danymi AI)
+        // Stwórz edytowalne etapy z workflow
         const steps = data.workflow.nodes.map((node, index) => ({
           id: node.id || `node-${index}`,
           name: node.name,
           type: node.shortType || node.type,
-          tileTitle: node.tileTitle || node.actionTitle || node.name,
-          popupTitle: node.popupTitle || node.toolName || node.shortType || '',
-          popupDescription: node.popupDescription || ''
+          tileTitle: node.tileTitle || node.name,
+          tileSubtitle: node.tileSubtitle || node.shortType || '',
+          popupEmoji: node.popupEmoji || '🔧',
+          popupTitle: node.popupTitle || node.name,
+          popupDescription: node.popupDescription || '',
+          color: node.color
         }))
         setWorkflowSteps(steps)
 
-        setStatus('Workflow wygenerowany! Możesz edytować etapy.')
+        setStatus('Workflow sparsowany! Możesz edytować etapy.')
         setStatusType('success')
       } else {
         setStatus(`Błąd: ${data.error}`)
@@ -204,74 +194,31 @@ function App() {
     } finally {
       setIsGeneratingWorkflow(false)
     }
-  }, [customPrompts.workflowPrompt])
+  }, [])
 
-  // KROK 2: Generowanie narracji
-  const handleGenerateNarration = useCallback(async (context, inputText) => {
-    const { replicateApiKey } = getApiKeys()
+  // KROK 2: Parsowanie narracji z szablonu
+  const handleGenerateNarration = useCallback(async (inputText) => {
     if (!workflow) return
 
-    // Jeśli jest gotowy input narracji, sparsuj go bez AI
-    if (inputText && inputText.trim()) {
-      setIsGeneratingNarration(true)
-      setStatus('Parsowanie narracji...')
-      setStatusType('')
-      setAudioSegments(null)
-
-      try {
-        const response = await fetch('/api/parse-narration', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            workflow,
-            workflowSteps,
-            narrationInput: inputText
-          })
-        })
-
-        const data = await response.json()
-
-        if (data.success) {
-          setNarration(data.narration)
-          setStatus('Narracja sparsowana! Możesz edytować teksty.')
-          setStatusType('success')
-        } else {
-          setStatus(`Błąd: ${data.error}`)
-          setStatusType('error')
-        }
-      } catch (err) {
-        setStatus(`Błąd: ${err.message}`)
-        setStatusType('error')
-      } finally {
-        setIsGeneratingNarration(false)
-      }
-      return
-    }
-
-    // Brak inputu - generuj przez AI
-    if (!replicateApiKey) {
-      setStatus('Podaj Replicate API Key lub wklej gotową narrację')
+    if (!inputText || !inputText.trim()) {
+      setStatus('Wklej szablon narracji')
       setStatusType('error')
       return
     }
 
     setIsGeneratingNarration(true)
-    setStatus('Generowanie narracji AI...')
+    setStatus('Parsowanie narracji...')
     setStatusType('')
-
-    // Reset audio
     setAudioSegments(null)
 
     try {
-      const response = await fetch('/api/generate-narration', {
+      const response = await fetch('/api/parse-narration', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           workflow,
-          workflowSteps, // Przekaż edytowane etapy
-          replicateApiToken: replicateApiKey,
-          context,
-          customPrompt: customPrompts.narrationPrompt || undefined
+          workflowSteps,
+          narrationInput: inputText
         })
       })
 
@@ -279,7 +226,7 @@ function App() {
 
       if (data.success) {
         setNarration(data.narration)
-        setStatus('Narracja wygenerowana! Możesz edytować teksty.')
+        setStatus('Narracja sparsowana! Możesz edytować teksty.')
         setStatusType('success')
       } else {
         setStatus(`Błąd: ${data.error}`)
@@ -291,7 +238,7 @@ function App() {
     } finally {
       setIsGeneratingNarration(false)
     }
-  }, [workflow, workflowSteps, customPrompts.narrationPrompt])
+  }, [workflow, workflowSteps])
 
   // KROK 3: Generowanie audio
   const handleGenerateAudio = useCallback(async (segmentIndex = null) => {
@@ -466,7 +413,6 @@ function App() {
 
   // Helpers
   const getStepStatus = (stepNum) => {
-    if (stepNum === 0) return 'active' // Prompty - zawsze aktywne
     if (stepNum === 1) return workflow ? 'completed' : 'active'
     if (stepNum === 2) return narration ? 'completed' : workflow ? 'active' : 'disabled'
     if (stepNum === 3) return audioSegments ? 'completed' : narration ? 'active' : 'disabled'
@@ -493,23 +439,12 @@ function App() {
         <h1 style={styles.title}>N8N Workflow Animator</h1>
       </header>
 
-      {/* KROK 0: Prompty */}
-      <div style={styles.section}>
-        <div style={styles.card}>
-          <h2 style={styles.sectionTitle}>
-            <span style={getStepNumberStyle(0)}>0</span>
-            Prompty AI (opcjonalne)
-          </h2>
-          <PromptsEditor onPromptsChange={setCustomPrompts} />
-        </div>
-      </div>
-
       {/* KROK 1: Opis workflow */}
       <div style={styles.section}>
         <div style={styles.card}>
           <h2 style={styles.sectionTitle}>
             <span style={getStepNumberStyle(1)}>1</span>
-            Opis Workflow
+            Workflow
           </h2>
           <WorkflowInput
             onGenerate={handleGenerateWorkflow}
@@ -543,43 +478,26 @@ function App() {
               Narracja
             </h2>
 
-            {/* Input do narracji - gotowy tekst */}
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', color: '#888', fontSize: '0.85rem', marginBottom: '8px' }}>
-                Input narracji (opcjonalnie - wklej gotowy tekst lub zostaw puste dla AI)
-              </label>
-              <textarea
-                style={{
-                  width: '100%',
-                  minHeight: '120px',
-                  padding: '12px',
-                  background: '#0f0f23',
-                  border: '2px solid #333',
-                  borderRadius: '8px',
-                  color: '#fff',
-                  fontSize: '0.85rem',
-                  fontFamily: 'inherit',
-                  lineHeight: '1.5',
-                  resize: 'vertical',
-                  outline: 'none',
-                  boxSizing: 'border-box'
-                }}
-                value={narrationInput}
-                onChange={(e) => handleNarrationInputChange(e.target.value)}
-                placeholder={`Format JSON lub tekstowy:
-
-{
-  "intro": "Hook wstepny...",
-  "nodes": [
-    {"name": "Nazwa node", "narration": "Co robi...", "description": "Opis popup..."}
-  ],
-  "outro": "Podsumowanie..."
-}`}
-              />
-              <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '4px' }}>
-                Wklej JSON z intro/nodes/outro lub zostaw puste - AI wygeneruje narrację
-              </div>
-            </div>
+            <textarea
+              style={{
+                width: '100%',
+                minHeight: '150px',
+                padding: '12px',
+                background: '#0f0f23',
+                border: '2px solid #333',
+                borderRadius: '8px',
+                color: '#fff',
+                fontSize: '0.85rem',
+                fontFamily: 'inherit',
+                lineHeight: '1.5',
+                resize: 'vertical',
+                outline: 'none',
+                boxSizing: 'border-box',
+                marginBottom: '12px'
+              }}
+              value={narrationInput}
+              onChange={(e) => handleNarrationInputChange(e.target.value)}
+            />
 
             <button
               style={{
@@ -587,14 +505,10 @@ function App() {
                 ...styles.buttonSecondary,
                 ...(isGeneratingNarration ? styles.buttonDisabled : {})
               }}
-              onClick={() => handleGenerateNarration('', narrationInput)}
+              onClick={() => handleGenerateNarration(narrationInput)}
               disabled={isGeneratingNarration}
             >
-              {isGeneratingNarration
-                ? 'Przetwarzanie...'
-                : narrationInput.trim()
-                  ? 'Użyj wklejonej narracji'
-                  : 'Generuj narrację (AI)'}
+              {isGeneratingNarration ? 'Przetwarzanie...' : 'Parsuj narrację'}
             </button>
           </div>
         </div>

@@ -467,17 +467,20 @@ export async function calculateNarratedTiming(workflow, audioSegments, settings)
   }
 
   // Faza 5: CTA (scroll po skosie do brandingu z powiększeniem)
+  // Stała długość animacji: 3 sekundy (niezależnie od długości audio)
+  const CTA_ANIMATION_DURATION = 3000
   const ctaSegment = audioSegments?.find(s => s.type === 'cta')
   if (ctaSegment?.audioPath && existsSync(ctaSegment.audioPath)) {
-    const ctaDuration = await getAudioDuration(ctaSegment.audioPath)
     timeline.push({
       phase: 'cta',
       startTime: currentTime,
-      endTime: currentTime + ctaDuration + 500,
+      endTime: currentTime + CTA_ANIMATION_DURATION,
       audioPath: ctaSegment.audioPath,
-      text: ctaSegment.text
+      text: ctaSegment.text,
+      sfxPath: sfx.whooshPath, // Efekt dźwiękowy whoosh przy animacji CTA
+      sfxType: 'whoosh'
     })
-    currentTime += ctaDuration + 500
+    currentTime += CTA_ANIMATION_DURATION
   }
 
   // Final zoom out (tylko jeśli nie było CTA)
@@ -641,21 +644,18 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
   // Nodes - wszystkie widoczne od poczatku
   const nodesHtml = workflow.nodes.map(node => {
     const index = workflow.animationOrder.indexOf(node.name)
-    const emojiOrBrand = getNodeEmoji(node.type)
+    const stepNumber = index + 1 // Numer etapu 1, 2, 3...
     // Użyj displayName do wyświetlania (jeśli istnieje), otherwise name
     const displayName = node.displayName || node.name
     const [nameLine1, nameLine2] = wrapNodeText(displayName, 26)
 
-    // Sprawdź czy to brandowa ikona czy emoji
-    const isBrand = isBrandIcon(emojiOrBrand)
-    const iconHtml = isBrand
-      ? `<svg x="24" y="${(NODE_HEIGHT - 28) / 2}" width="28" height="28" viewBox="0 0 24 24">${getBrandIconSvg(emojiOrBrand)}</svg>`
-      : `<text x="37" y="${NODE_HEIGHT / 2 + 8}" font-size="28" text-anchor="middle" font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif">${emojiOrBrand}</text>`
+    // Numer etapu zamiast emoji/ikony - biały na kolorowym tle
+    const numberHtml = `<text x="37" y="${NODE_HEIGHT / 2 + 10}" font-size="26" font-weight="bold" text-anchor="middle" fill="#ffffff" font-family="Inter, system-ui, sans-serif">${stepNumber}.</text>`
 
     return `
       <g class="node" data-name="${node.name}" data-index="${index}" data-x="${node.x}" data-y="${node.y}" transform="translate(${node.x}, ${node.y})">
         <!-- Glow -->
-        <rect class="node-glow" x="-20" y="-20" width="${NODE_WIDTH + 40}" height="${NODE_HEIGHT + 40}" rx="25" fill="${node.color}" opacity="0" filter="url(#glow)"/>
+        <rect class="node-glow" x="-20" y="-20" width="${NODE_WIDTH + 40}" height="${NODE_HEIGHT + 40}" rx="25" fill="#fe6f00" opacity="0" filter="url(#glow)"/>
 
         <!-- Shadow z efektem 3D -->
         <rect x="6" y="8" width="${NODE_WIDTH}" height="${NODE_HEIGHT}" rx="12" fill="#000" opacity="0.5"/>
@@ -664,13 +664,13 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
         <rect class="node-bg" x="0" y="0" width="${NODE_WIDTH}" height="${NODE_HEIGHT}" rx="12" fill="#262640" stroke="#404060" stroke-width="2"/>
 
         <!-- Color bar - zintegrowany z zaokragleniami -->
-        <path d="M0,12 Q0,0 12,0 L6,0 L6,${NODE_HEIGHT} L12,${NODE_HEIGHT} Q0,${NODE_HEIGHT} 0,${NODE_HEIGHT - 12} Z" fill="${node.color}"/>
+        <path class="node-color-bar" d="M0,12 Q0,0 12,0 L6,0 L6,${NODE_HEIGHT} L12,${NODE_HEIGHT} Q0,${NODE_HEIGHT} 0,${NODE_HEIGHT - 12} Z" fill="${node.color}"/>
 
         <!-- Icon bg -->
         <rect x="16" y="${(NODE_HEIGHT - 42) / 2}" width="42" height="42" rx="10" fill="${node.color}"/>
 
-        <!-- Icon (SVG brand lub emoji) -->
-        ${iconHtml}
+        <!-- Numer etapu (1, 2, 3...) zamiast emoji -->
+        ${numberHtml}
 
         <!-- Name - 2 linie -->
         ${nameLine2 ? `
@@ -875,12 +875,13 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
       const lines = wrapText(text, maxCharsPerLine);
       const numLines = lines.length || 1;
 
-      // Dynamiczna wysokosc z równymi paddingami
+      // Dynamiczna wysokosc z równymi paddingami (góra i dół taki sam)
       const hasType = typePLText && typePLText.length > 0;
       const titleHeight = 22;
       const typeHeight = hasType ? 18 : 0;
       const lineHeight = 20;
-      const boxHeight = padding + titleHeight + typeHeight + (numLines * lineHeight) + padding;
+      const bottomPadding = padding + 10; // Dodatkowy padding dolny dla wyrównania wizualnego
+      const boxHeight = padding + titleHeight + typeHeight + (numLines * lineHeight) + bottomPadding;
 
       // Pozycja popup - ZAWSZE NAD node'em (2x większy margines = 50px)
       const popupY = nodePos.nodeY - boxHeight - 50;
@@ -894,13 +895,13 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
       popupGroup.setAttribute('data-node', nodeName);
       popupGroup.setAttribute('opacity', '1');
 
-      // Strzalka przerywana
+      // Strzalka przerywana - w kolorze brandowym
       const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'line');
       arrow.setAttribute('x1', nodePos.nodeX + nodeWidth / 2);
       arrow.setAttribute('y1', arrowY1);
       arrow.setAttribute('x2', nodePos.nodeX + nodeWidth / 2);
       arrow.setAttribute('y2', arrowY2);
-      arrow.setAttribute('stroke', '#ff6b6b');
+      arrow.setAttribute('stroke', '#fe6f00');
       arrow.setAttribute('stroke-width', '3');
       arrow.setAttribute('stroke-dasharray', '8 4');
       popupGroup.appendChild(arrow);
@@ -910,7 +911,7 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
       boxGroup.setAttribute('transform', 'translate(' + popupX + ',' + popupY + ')');
       boxGroup.setAttribute('filter', 'url(#popup-shadow)');
 
-      // Background rectangle
+      // Background rectangle - ramka w kolorze brandowym
       const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
       bg.setAttribute('x', '0');
       bg.setAttribute('y', '0');
@@ -918,7 +919,7 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
       bg.setAttribute('height', boxHeight);
       bg.setAttribute('rx', '14');
       bg.setAttribute('fill', '#1a1a2e');
-      bg.setAttribute('stroke', '#ff6b6b');
+      bg.setAttribute('stroke', '#fe6f00');
       bg.setAttribute('stroke-width', '3');
       boxGroup.appendChild(bg);
 
@@ -952,12 +953,12 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
         boxGroup.appendChild(emojiText);
       }
 
-      // Title - z paddingiem
+      // Title - z paddingiem, w kolorze brandowym
       const titleY = padding + 18;
       const titleText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       titleText.setAttribute('x', String(contentStartX));
       titleText.setAttribute('y', String(titleY));
-      titleText.setAttribute('fill', '#ff6b6b');
+      titleText.setAttribute('fill', '#fe6f00');
       titleText.setAttribute('font-size', '16');
       titleText.setAttribute('font-weight', 'bold');
       titleText.setAttribute('font-family', 'Inter, system-ui, sans-serif');
@@ -1011,16 +1012,21 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
       nodes.forEach(node => {
         const glow = node.querySelector('.node-glow');
         const bg = node.querySelector('.node-bg');
+        const colorBar = node.querySelector('.node-color-bar');
 
         if (node.dataset.name === nodeName && active) {
-          // PROSTY HIGHLIGHT - tylko glow i border, bez animacji
+          // PROSTY HIGHLIGHT - glow i border w kolorze brandowym #fe6f00
           glow.style.opacity = 0.5;
-          bg.setAttribute('stroke', '#ff6b6b');
+          bg.setAttribute('stroke', '#fe6f00');
           bg.setAttribute('stroke-width', '4');
+          // Ukryj kolorowy pasek podczas podświetlenia
+          if (colorBar) colorBar.style.opacity = '0';
         } else {
           glow.style.opacity = 0;
           bg.setAttribute('stroke', '#404060');
           bg.setAttribute('stroke-width', '2');
+          // Przywróć kolorowy pasek
+          if (colorBar) colorBar.style.opacity = '1';
         }
       });
     }

@@ -66,27 +66,156 @@ app.get('/api/health', (req, res) => {
 
 // === API GENEROWANIA WORKFLOW ===
 
-// Generuj workflow z opisu tekstowego
+// Paleta kolorów dla etapów
+const STAGE_COLORS = [
+  '#FF6B6B', // czerwony
+  '#4ECDC4', // turkusowy
+  '#45B7D1', // niebieski
+  '#96CEB4', // zielony
+  '#FFEAA7', // żółty
+  '#DDA0DD', // fioletowy
+  '#98D8C8', // miętowy
+  '#F7DC6F', // złoty
+  '#BB8FCE', // lawendowy
+  '#85C1E9', // błękitny
+  '#F8B500', // pomarańczowy
+  '#00CED1', // ciemny turkus
+]
+
+// Parsuj workflow z szablonu tekstowego (bez AI)
+app.post('/api/parse-workflow', async (req, res) => {
+  try {
+    const { description } = req.body
+
+    if (!description) {
+      return res.status(400).json({ error: 'Missing description' })
+    }
+
+    console.log(`[WorkflowParser] Parsing workflow from template...`)
+
+    // Parsuj szablon:
+    // Etap 1:
+    // Tytuł kafelka: ...
+    // Podtytuł kafelka: ...
+    // Emotikon pop-upu: ...
+    // Tytuł pop-upu: ...
+    // Opis pop-upu: ...
+
+    const stages = []
+    const stageRegex = /Etap\s*(\d+):\s*([\s\S]*?)(?=Etap\s*\d+:|$)/gi
+    let match
+
+    while ((match = stageRegex.exec(description)) !== null) {
+      const stageNum = parseInt(match[1])
+      const stageContent = match[2].trim()
+
+      // Parsuj pola
+      const tileTitle = stageContent.match(/Tytuł kafelka:\s*(.+?)(?:\n|$)/i)?.[1]?.trim() || `Etap ${stageNum}`
+      const tileSubtitle = stageContent.match(/Podtytuł kafelka:\s*(.+?)(?:\n|$)/i)?.[1]?.trim() || ''
+      const popupEmoji = stageContent.match(/Emotikon pop-?upu:\s*(.+?)(?:\n|$)/i)?.[1]?.trim() || '🔧'
+      const popupTitle = stageContent.match(/Tytuł pop-?upu:\s*(.+?)(?:\n|$)/i)?.[1]?.trim() || tileTitle
+      const popupDescription = stageContent.match(/Opis pop-?upu:\s*(.+?)(?:\n|$)/i)?.[1]?.trim() || ''
+
+      stages.push({
+        stageNum,
+        tileTitle,
+        tileSubtitle,
+        popupEmoji,
+        popupTitle,
+        popupDescription
+      })
+    }
+
+    if (stages.length === 0) {
+      return res.status(400).json({ error: 'Nie znaleziono etapów w szablonie. Użyj formatu: Etap 1: Tytuł kafelka: ...' })
+    }
+
+    // Sortuj po numerze etapu
+    stages.sort((a, b) => a.stageNum - b.stageNum)
+
+    console.log(`[WorkflowParser] Found ${stages.length} stages`)
+
+    // Twórz strukturę workflow
+    const nodes = stages.map((stage, index) => ({
+      id: `node-${index}`,
+      name: stage.tileTitle,
+      type: stage.tileSubtitle || 'Action',
+      shortType: stage.tileSubtitle || 'Action',
+      tileTitle: stage.tileTitle,
+      tileSubtitle: stage.tileSubtitle,
+      popupEmoji: stage.popupEmoji,
+      popupTitle: stage.popupTitle,
+      popupDescription: stage.popupDescription,
+      color: STAGE_COLORS[index % STAGE_COLORS.length],
+      x: 100 + index * 400,
+      y: 300,
+      isTrigger: index === 0
+    }))
+
+    // Twórz edges
+    const edges = []
+    for (let i = 0; i < nodes.length - 1; i++) {
+      edges.push({
+        source: nodes[i].name,
+        target: nodes[i + 1].name
+      })
+    }
+
+    const workflow = {
+      name: 'Workflow',
+      nodes,
+      edges,
+      animationOrder: nodes.map(n => n.name)
+    }
+
+    res.json({
+      success: true,
+      workflow
+    })
+  } catch (error) {
+    console.error('[WorkflowParser] Error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Stary endpoint - przekieruj na nowy parser (dla kompatybilności)
 app.post('/api/generate-workflow', async (req, res) => {
   try {
     const { description, replicateApiToken, customPrompt } = req.body
 
-    if (!description || !replicateApiToken) {
-      return res.status(400).json({ error: 'Missing description or API token' })
+    if (!description) {
+      return res.status(400).json({ error: 'Missing description' })
     }
 
-    console.log(`[WorkflowGen] Generating workflow from description...`)
-    console.log(`[WorkflowGen] Custom prompt: ${customPrompt ? 'yes' : 'no'}`)
+    // Jeśli jest API token, użyj starej metody AI
+    if (replicateApiToken) {
+      console.log(`[WorkflowGen] Generating workflow from description...`)
+      console.log(`[WorkflowGen] Custom prompt: ${customPrompt ? 'yes' : 'no'}`)
 
-    const result = await generateWorkflowFromText(description, replicateApiToken, customPrompt)
+      const result = await generateWorkflowFromText(description, replicateApiToken, customPrompt)
 
-    if (result.success) {
-      console.log(`[WorkflowGen] Workflow generated successfully`)
-      res.json(result)
-    } else {
-      console.error(`[WorkflowGen] Failed: ${result.error}`)
-      res.status(500).json(result)
+      if (result.success) {
+        console.log(`[WorkflowGen] Workflow generated successfully`)
+        res.json(result)
+      } else {
+        console.error(`[WorkflowGen] Failed: ${result.error}`)
+        res.status(500).json(result)
+      }
+      return
     }
+
+    // Bez API token - parsuj szablon
+    console.log(`[WorkflowParser] Parsing workflow from template (no AI)...`)
+
+    // Przekieruj do parsera
+    req.body = { description }
+    const parseResponse = await fetch(`http://localhost:${PORT}/api/parse-workflow`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description })
+    })
+    const result = await parseResponse.json()
+    res.json(result)
   } catch (error) {
     console.error('[WorkflowGen] Error:', error)
     res.status(500).json({ error: error.message })
@@ -95,7 +224,13 @@ app.post('/api/generate-workflow', async (req, res) => {
 
 // === API NARRACJI AI ===
 
-// Parsuj gotową narrację (bez AI)
+// Parsuj gotową narrację (bez AI) - nowy format tekstowy
+// Format:
+// Hook: tekst intro...
+// Etap 1: tekst dla etapu 1...
+// Etap 2: tekst dla etapu 2...
+// Outro: tekst outro...
+// CTA: tekst call to action...
 app.post('/api/parse-narration', async (req, res) => {
   try {
     const { workflow, workflowSteps, narrationInput } = req.body
@@ -106,67 +241,57 @@ app.post('/api/parse-narration', async (req, res) => {
 
     console.log(`[Parse Narration] Parsing input for "${workflow.name}"...`)
 
-    // Spróbuj sparsować jako JSON
-    let parsedNarration = null
+    const input = narrationInput.trim()
 
-    try {
-      // Usuń ewentualne markdown backticks
-      let cleanInput = narrationInput.trim()
-      if (cleanInput.startsWith('```json')) {
-        cleanInput = cleanInput.replace(/^```json\s*/, '').replace(/\s*```$/, '')
-      } else if (cleanInput.startsWith('```')) {
-        cleanInput = cleanInput.replace(/^```\s*/, '').replace(/\s*```$/, '')
-      }
+    // Parsuj nowy format tekstowy:
+    // Hook: ...
+    // Etap 1: ...
+    // Etap 2: ...
+    // Outro: ...
+    // CTA: ...
 
-      // Sparsuj JSON
-      parsedNarration = JSON.parse(cleanInput)
-      console.log(`[Parse Narration] Successfully parsed as JSON`)
-    } catch (jsonError) {
-      console.log(`[Parse Narration] Not valid JSON, using raw text`)
-      // Jeśli nie JSON, użyj jako intro z pustą resztą
-      parsedNarration = {
-        intro: narrationInput.trim(),
-        nodes: [],
-        outro: ''
-      }
+    // Wyciągnij Hook/Intro
+    const hookMatch = input.match(/Hook:\s*(.+?)(?=\n*Etap\s*\d+:|$)/is)
+    const intro = hookMatch?.[1]?.trim() || ''
+
+    // Wyciągnij etapy
+    const stageTexts = []
+    const stageRegex = /Etap\s*(\d+):\s*(.+?)(?=\n*(?:Etap\s*\d+:|Outro:|CTA:|$))/gis
+    let match
+    while ((match = stageRegex.exec(input)) !== null) {
+      const stageNum = parseInt(match[1])
+      const text = match[2].trim()
+      stageTexts.push({ stageNum, text })
     }
+    stageTexts.sort((a, b) => a.stageNum - b.stageNum)
 
-    // Upewnij się że mamy poprawną strukturę
+    // Wyciągnij Outro
+    const outroMatch = input.match(/Outro:\s*(.+?)(?=\n*CTA:|$)/is)
+    const outro = outroMatch?.[1]?.trim() || ''
+
+    // Wyciągnij CTA
+    const ctaMatch = input.match(/CTA:\s*(.+?)$/is)
+    const cta = ctaMatch?.[1]?.trim() || ''
+
+    console.log(`[Parse Narration] Found: Hook=${!!intro}, Stages=${stageTexts.length}, Outro=${!!outro}, CTA=${!!cta}`)
+
+    // Buduj strukturę narracji
+    const workflowNodes = workflow.nodes || []
+
     const narration = {
-      intro: parsedNarration.intro || '',
-      nodes: [],
-      outro: parsedNarration.outro || ''
-    }
-
-    // Mapuj nodes z parsowanego na workflow nodes
-    if (parsedNarration.nodes && Array.isArray(parsedNarration.nodes)) {
-      // Pobierz listę nodes z workflow
-      const workflowNodes = workflow.nodes || []
-
-      narration.nodes = parsedNarration.nodes.map((parsedNode, index) => {
-        // Znajdź odpowiadający node w workflow
-        const matchingWorkflowNode = workflowNodes.find(wn =>
-          wn.name === parsedNode.name ||
-          wn.name?.toLowerCase() === parsedNode.name?.toLowerCase()
-        ) || workflowNodes[index]
-
+      intro: intro,
+      nodes: workflowNodes.map((node, index) => {
+        const stageText = stageTexts[index]?.text || ''
         return {
-          name: parsedNode.name || matchingWorkflowNode?.name || `Node ${index + 1}`,
-          namePL: parsedNode.namePL || parsedNode.name || matchingWorkflowNode?.tileTitle || '',
-          typePL: parsedNode.typePL || matchingWorkflowNode?.shortType || '',
-          narration: parsedNode.narration || '',
-          description: parsedNode.description || ''
+          name: node.name,
+          namePL: node.tileTitle || node.name,
+          typePL: node.shortType || '',
+          narration: stageText,
+          description: node.popupDescription || ''
         }
-      })
-    } else {
-      // Brak nodes w parsowanym - stwórz puste dla każdego workflow node
-      narration.nodes = (workflow.nodes || []).map((wn, index) => ({
-        name: wn.name,
-        namePL: wn.tileTitle || wn.name,
-        typePL: wn.shortType || '',
-        narration: '',
-        description: ''
-      }))
+      }),
+      outro: outro,
+      cta: cta
     }
 
     // Wymuś kropki na końcu zdań
@@ -180,6 +305,9 @@ app.post('/api/parse-narration', async (req, res) => {
     })
     if (narration.outro && !narration.outro.trim().endsWith('.')) {
       narration.outro = narration.outro.trim() + '.'
+    }
+    if (narration.cta && !narration.cta.trim().endsWith('.')) {
+      narration.cta = narration.cta.trim() + '.'
     }
 
     console.log(`[Parse Narration] Parsed ${narration.nodes.length} nodes`)
