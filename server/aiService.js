@@ -2,14 +2,33 @@
 
 import { buildNarrationPrompt, selectImportantNodes } from './aiPrompts.js'
 
-export async function generateNarration(workflow, apiToken, context = '') {
+export async function generateNarration(workflow, apiToken, context = '', customPrompt = null) {
   // Wybierz tylko najważniejsze nodes (pomijając techniczne elementy)
   const selectedNodes = selectImportantNodes(workflow)
 
   console.log('[AI] Selected important nodes:', selectedNodes.length, 'out of', workflow.animationOrder.length)
 
-  // Zbuduj prompt używając wybranych nodes
-  const prompt = buildNarrationPrompt(workflow, selectedNodes, context)
+  // Zbuduj prompt - customowy lub domyślny
+  let prompt
+  if (customPrompt && customPrompt.trim()) {
+    // Przygotuj opis nodes dla podstawienia
+    const nodesDescription = selectedNodes.map((nodeName, index) => {
+      const node = workflow.nodes.find(n => n.name === nodeName)
+      return `${index + 1}. "${node.name}" (typ: ${node.shortType})`
+    }).join('\n')
+
+    // Podstaw zmienne w customowym prompcie
+    prompt = customPrompt
+      .replace(/\{\{workflowName\}\}/g, workflow.name || 'Workflow')
+      .replace(/\{\{nodeCount\}\}/g, String(selectedNodes.length))
+      .replace(/\{\{nodesDescription\}\}/g, nodesDescription)
+
+    console.log('[AI] Using custom prompt')
+  } else {
+    // Użyj domyślnego promptu
+    prompt = buildNarrationPrompt(workflow, selectedNodes, context)
+    console.log('[AI] Using default prompt')
+  }
 
   try {
     console.log('[AI] Calling Replicate HTTP API...')

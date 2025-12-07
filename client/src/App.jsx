@@ -5,6 +5,7 @@ import WorkflowSteps from './components/WorkflowSteps.jsx'
 import NarrationEditor from './components/NarrationEditor.jsx'
 import AudioPreview from './components/AudioPreview.jsx'
 import ApiKeys from './components/ApiKeys.jsx'
+import PromptsEditor from './components/PromptsEditor.jsx'
 
 const styles = {
   container: {
@@ -115,6 +116,15 @@ function App() {
   const [narration, setNarration] = useState(null)
   const [audioSegments, setAudioSegments] = useState(null)
 
+  // Prompty (customowe z etapu 0)
+  const [customPrompts, setCustomPrompts] = useState({
+    workflowPrompt: localStorage.getItem('customWorkflowPrompt') || '',
+    narrationPrompt: localStorage.getItem('customNarrationPrompt') || ''
+  })
+
+  // Input narracji (gotowy tekst do parsowania)
+  const [narrationInput, setNarrationInput] = useState(() => localStorage.getItem('narrationInput') || '')
+
   // Stan UI
   const [settings, setSettings] = useState({
     aspectRatio: '16:9',
@@ -161,7 +171,8 @@ function App() {
         body: JSON.stringify({
           description,
           context,
-          replicateApiToken: replicateApiKey
+          replicateApiToken: replicateApiKey,
+          customPrompt: customPrompts.workflowPrompt || undefined
         })
       })
 
@@ -193,12 +204,56 @@ function App() {
     } finally {
       setIsGeneratingWorkflow(false)
     }
-  }, [])
+  }, [customPrompts.workflowPrompt])
 
   // KROK 2: Generowanie narracji
-  const handleGenerateNarration = useCallback(async (context) => {
+  const handleGenerateNarration = useCallback(async (context, inputText) => {
     const { replicateApiKey } = getApiKeys()
-    if (!replicateApiKey || !workflow) return
+    if (!workflow) return
+
+    // Jeśli jest gotowy input narracji, sparsuj go bez AI
+    if (inputText && inputText.trim()) {
+      setIsGeneratingNarration(true)
+      setStatus('Parsowanie narracji...')
+      setStatusType('')
+      setAudioSegments(null)
+
+      try {
+        const response = await fetch('/api/parse-narration', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workflow,
+            workflowSteps,
+            narrationInput: inputText
+          })
+        })
+
+        const data = await response.json()
+
+        if (data.success) {
+          setNarration(data.narration)
+          setStatus('Narracja sparsowana! Możesz edytować teksty.')
+          setStatusType('success')
+        } else {
+          setStatus(`Błąd: ${data.error}`)
+          setStatusType('error')
+        }
+      } catch (err) {
+        setStatus(`Błąd: ${err.message}`)
+        setStatusType('error')
+      } finally {
+        setIsGeneratingNarration(false)
+      }
+      return
+    }
+
+    // Brak inputu - generuj przez AI
+    if (!replicateApiKey) {
+      setStatus('Podaj Replicate API Key lub wklej gotową narrację')
+      setStatusType('error')
+      return
+    }
 
     setIsGeneratingNarration(true)
     setStatus('Generowanie narracji AI...')
@@ -215,7 +270,8 @@ function App() {
           workflow,
           workflowSteps, // Przekaż edytowane etapy
           replicateApiToken: replicateApiKey,
-          context
+          context,
+          customPrompt: customPrompts.narrationPrompt || undefined
         })
       })
 
@@ -235,7 +291,7 @@ function App() {
     } finally {
       setIsGeneratingNarration(false)
     }
-  }, [workflow, workflowSteps])
+  }, [workflow, workflowSteps, customPrompts.narrationPrompt])
 
   // KROK 3: Generowanie audio
   const handleGenerateAudio = useCallback(async (segmentIndex = null) => {
@@ -410,11 +466,18 @@ function App() {
 
   // Helpers
   const getStepStatus = (stepNum) => {
+    if (stepNum === 0) return 'active' // Prompty - zawsze aktywne
     if (stepNum === 1) return workflow ? 'completed' : 'active'
     if (stepNum === 2) return narration ? 'completed' : workflow ? 'active' : 'disabled'
     if (stepNum === 3) return audioSegments ? 'completed' : narration ? 'active' : 'disabled'
     if (stepNum === 4) return audioSegments ? 'active' : 'disabled' // Eksport
     return 'disabled'
+  }
+
+  // Auto-save narration input
+  const handleNarrationInputChange = (value) => {
+    setNarrationInput(value)
+    localStorage.setItem('narrationInput', value)
   }
 
   const getStepNumberStyle = (stepNum) => {
@@ -429,6 +492,17 @@ function App() {
       <header style={styles.header}>
         <h1 style={styles.title}>N8N Workflow Animator</h1>
       </header>
+
+      {/* KROK 0: Prompty */}
+      <div style={styles.section}>
+        <div style={styles.card}>
+          <h2 style={styles.sectionTitle}>
+            <span style={getStepNumberStyle(0)}>0</span>
+            Prompty AI (opcjonalne)
+          </h2>
+          <PromptsEditor onPromptsChange={setCustomPrompts} />
+        </div>
+      </div>
 
       {/* KROK 1: Opis workflow */}
       <div style={styles.section}>
@@ -468,16 +542,59 @@ function App() {
               <span style={getStepNumberStyle(2)}>2</span>
               Narracja
             </h2>
+
+            {/* Input do narracji - gotowy tekst */}
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', color: '#888', fontSize: '0.85rem', marginBottom: '8px' }}>
+                Input narracji (opcjonalnie - wklej gotowy tekst lub zostaw puste dla AI)
+              </label>
+              <textarea
+                style={{
+                  width: '100%',
+                  minHeight: '120px',
+                  padding: '12px',
+                  background: '#0f0f23',
+                  border: '2px solid #333',
+                  borderRadius: '8px',
+                  color: '#fff',
+                  fontSize: '0.85rem',
+                  fontFamily: 'inherit',
+                  lineHeight: '1.5',
+                  resize: 'vertical',
+                  outline: 'none',
+                  boxSizing: 'border-box'
+                }}
+                value={narrationInput}
+                onChange={(e) => handleNarrationInputChange(e.target.value)}
+                placeholder={`Format JSON lub tekstowy:
+
+{
+  "intro": "Hook wstepny...",
+  "nodes": [
+    {"name": "Nazwa node", "narration": "Co robi...", "description": "Opis popup..."}
+  ],
+  "outro": "Podsumowanie..."
+}`}
+              />
+              <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '4px' }}>
+                Wklej JSON z intro/nodes/outro lub zostaw puste - AI wygeneruje narrację
+              </div>
+            </div>
+
             <button
               style={{
                 ...styles.button,
                 ...styles.buttonSecondary,
                 ...(isGeneratingNarration ? styles.buttonDisabled : {})
               }}
-              onClick={() => handleGenerateNarration(localStorage.getItem('workflowContext') || '')}
+              onClick={() => handleGenerateNarration('', narrationInput)}
               disabled={isGeneratingNarration}
             >
-              {isGeneratingNarration ? 'Generowanie...' : 'Generuj narrację'}
+              {isGeneratingNarration
+                ? 'Przetwarzanie...'
+                : narrationInput.trim()
+                  ? 'Użyj wklejonej narracji'
+                  : 'Generuj narrację (AI)'}
             </button>
           </div>
         </div>

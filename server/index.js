@@ -69,15 +69,16 @@ app.get('/api/health', (req, res) => {
 // Generuj workflow z opisu tekstowego
 app.post('/api/generate-workflow', async (req, res) => {
   try {
-    const { description, replicateApiToken } = req.body
+    const { description, replicateApiToken, customPrompt } = req.body
 
     if (!description || !replicateApiToken) {
       return res.status(400).json({ error: 'Missing description or API token' })
     }
 
     console.log(`[WorkflowGen] Generating workflow from description...`)
+    console.log(`[WorkflowGen] Custom prompt: ${customPrompt ? 'yes' : 'no'}`)
 
-    const result = await generateWorkflowFromText(description, replicateApiToken)
+    const result = await generateWorkflowFromText(description, replicateApiToken, customPrompt)
 
     if (result.success) {
       console.log(`[WorkflowGen] Workflow generated successfully`)
@@ -94,10 +95,109 @@ app.post('/api/generate-workflow', async (req, res) => {
 
 // === API NARRACJI AI ===
 
+// Parsuj gotową narrację (bez AI)
+app.post('/api/parse-narration', async (req, res) => {
+  try {
+    const { workflow, workflowSteps, narrationInput } = req.body
+
+    if (!workflow || !narrationInput) {
+      return res.status(400).json({ error: 'Missing workflow or narration input' })
+    }
+
+    console.log(`[Parse Narration] Parsing input for "${workflow.name}"...`)
+
+    // Spróbuj sparsować jako JSON
+    let parsedNarration = null
+
+    try {
+      // Usuń ewentualne markdown backticks
+      let cleanInput = narrationInput.trim()
+      if (cleanInput.startsWith('```json')) {
+        cleanInput = cleanInput.replace(/^```json\s*/, '').replace(/\s*```$/, '')
+      } else if (cleanInput.startsWith('```')) {
+        cleanInput = cleanInput.replace(/^```\s*/, '').replace(/\s*```$/, '')
+      }
+
+      // Sparsuj JSON
+      parsedNarration = JSON.parse(cleanInput)
+      console.log(`[Parse Narration] Successfully parsed as JSON`)
+    } catch (jsonError) {
+      console.log(`[Parse Narration] Not valid JSON, using raw text`)
+      // Jeśli nie JSON, użyj jako intro z pustą resztą
+      parsedNarration = {
+        intro: narrationInput.trim(),
+        nodes: [],
+        outro: ''
+      }
+    }
+
+    // Upewnij się że mamy poprawną strukturę
+    const narration = {
+      intro: parsedNarration.intro || '',
+      nodes: [],
+      outro: parsedNarration.outro || ''
+    }
+
+    // Mapuj nodes z parsowanego na workflow nodes
+    if (parsedNarration.nodes && Array.isArray(parsedNarration.nodes)) {
+      // Pobierz listę nodes z workflow
+      const workflowNodes = workflow.nodes || []
+
+      narration.nodes = parsedNarration.nodes.map((parsedNode, index) => {
+        // Znajdź odpowiadający node w workflow
+        const matchingWorkflowNode = workflowNodes.find(wn =>
+          wn.name === parsedNode.name ||
+          wn.name?.toLowerCase() === parsedNode.name?.toLowerCase()
+        ) || workflowNodes[index]
+
+        return {
+          name: parsedNode.name || matchingWorkflowNode?.name || `Node ${index + 1}`,
+          namePL: parsedNode.namePL || parsedNode.name || matchingWorkflowNode?.tileTitle || '',
+          typePL: parsedNode.typePL || matchingWorkflowNode?.shortType || '',
+          narration: parsedNode.narration || '',
+          description: parsedNode.description || ''
+        }
+      })
+    } else {
+      // Brak nodes w parsowanym - stwórz puste dla każdego workflow node
+      narration.nodes = (workflow.nodes || []).map((wn, index) => ({
+        name: wn.name,
+        namePL: wn.tileTitle || wn.name,
+        typePL: wn.shortType || '',
+        narration: '',
+        description: ''
+      }))
+    }
+
+    // Wymuś kropki na końcu zdań
+    if (narration.intro && !narration.intro.trim().endsWith('.')) {
+      narration.intro = narration.intro.trim() + '.'
+    }
+    narration.nodes.forEach(node => {
+      if (node.narration && !node.narration.trim().endsWith('.')) {
+        node.narration = node.narration.trim() + '.'
+      }
+    })
+    if (narration.outro && !narration.outro.trim().endsWith('.')) {
+      narration.outro = narration.outro.trim() + '.'
+    }
+
+    console.log(`[Parse Narration] Parsed ${narration.nodes.length} nodes`)
+
+    res.json({
+      success: true,
+      narration
+    })
+  } catch (error) {
+    console.error('[Parse Narration] Error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 // Generuj narrację przez Claude
 app.post('/api/generate-narration', async (req, res) => {
   try {
-    const { workflow, replicateApiToken, context } = req.body
+    const { workflow, replicateApiToken, context, customPrompt } = req.body
 
     if (!workflow || !replicateApiToken) {
       return res.status(400).json({ error: 'Missing workflow or API token' })
@@ -105,8 +205,9 @@ app.post('/api/generate-narration', async (req, res) => {
 
     console.log(`[AI] Generating narration for "${workflow.name}"...`)
     console.log(`[AI] Context length: ${context?.length || 0}`)
+    console.log(`[AI] Custom prompt: ${customPrompt ? 'yes' : 'no'}`)
 
-    const result = await generateNarration(workflow, replicateApiToken, context)
+    const result = await generateNarration(workflow, replicateApiToken, context, customPrompt)
 
     if (result.success) {
       // KRYTYCZNE: WYMUSZAJ kropki na końcu każdego zdania (AI ich nie dodaje!)

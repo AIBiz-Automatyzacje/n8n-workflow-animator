@@ -10,25 +10,15 @@ OPIS WORKFLOW:
 ${description}
 
 ZASADY GENEROWANIA:
-1. Workflow czytamy od LEWEJ do PRAWEJ
+1. Workflow czytamy od LEWEJ do PRAWEJ (linia prosta)
 2. Pierwszy node (trigger) jest PO LEWEJ
 3. Kolejne akcje idą W PRAWO
-4. Nodes układaj w SLALOM (góra-dół) dla lepszego efektu wizualnego
-5. Pomijaj techniczne nodes (wait, split, if, merge) - tylko główne akcje
-6. Każdy node musi mieć emoji odpowiedni do akcji
+4. Pomijaj techniczne nodes (wait, split, if, merge) - tylko główne akcje
+5. Każdy node musi mieć emoji odpowiedni do akcji
 
-UKŁAD WSPÓŁRZĘDNYCH (16:9, 1920x1080):
-- Trigger: x=200, y=400-600 (lewa strona, środek)
-- Akcje idą w prawo: x += 350-400 każdy krok
-- Slalom: y zmienia się +150/-150 co drugi node
-- Maksymalnie 70-80% ekranu (x: 200-1500, y: 200-880)
-
-PRZYKŁADOWY SLALOM:
-Node 1 (trigger): x=200, y=500
-Node 2: x=550, y=350 (w górę)
-Node 3: x=900, y=500 (środek)
-Node 4: x=1250, y=650 (w dół)
-Node 5: x=1600, y=500 (środek)
+UKŁAD WSPÓŁRZĘDNYCH:
+- Nodes w linii prostej: x rośnie, y=300 (stałe)
+- Odstęp między nodes: x += 400
 
 EMOJI DO NARZĘDZI:
 - Schedule Trigger: ⏰
@@ -105,8 +95,17 @@ WAŻNE:
 /**
  * Generuje workflow z opisu tekstowego przez AI
  */
-export async function generateWorkflowFromText(description, apiToken) {
-  const prompt = buildWorkflowGeneratorPrompt(description)
+export async function generateWorkflowFromText(description, apiToken, customPrompt = null) {
+  // Użyj customowego promptu jeśli podany, w przeciwnym razie domyślny
+  let prompt
+  if (customPrompt && customPrompt.trim()) {
+    // Podstaw zmienne w customowym prompcie
+    prompt = customPrompt.replace(/\{\{description\}\}/g, description)
+    console.log('[WorkflowGen] Using custom prompt')
+  } else {
+    prompt = buildWorkflowGeneratorPrompt(description)
+    console.log('[WorkflowGen] Using default prompt')
+  }
 
   try {
     console.log('[WorkflowGen] Generating workflow from description...')
