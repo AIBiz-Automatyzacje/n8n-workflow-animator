@@ -194,6 +194,11 @@ export function buildFullNarrationText(narration) {
   // Outro
   parts.push(narration.outro)
 
+  // CTA (Call to Action) - jeśli istnieje
+  if (narration.cta) {
+    parts.push(narration.cta)
+  }
+
   return parts.join('. ')
 }
 
@@ -234,13 +239,25 @@ export function buildSegmentedNarration(narration, workflow, speedConfig) {
     })
   })
 
-  // Outro (podczas scroll/zoom out)
+  // Outro (podczas scroll w lewo)
   segments.push({
     type: 'outro',
     text: narration.outro,
     startTime: currentTime,
     endTime: currentTime + 3000
   })
+  currentTime += 3000
+
+  // CTA - Call to Action (scroll do brandingu) - jeśli istnieje
+  if (narration.cta && narration.cta.trim()) {
+    segments.push({
+      type: 'cta',
+      text: narration.cta,
+      startTime: currentTime,
+      endTime: currentTime + 4000
+    })
+    currentTime += 4000
+  }
 
   return segments
 }

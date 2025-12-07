@@ -97,17 +97,34 @@ function AudioPreview({ audioSegments, narration, onRegenerate, isRegenerating }
 
   const segments = audioSegments?.segments || []
 
-  const getSegmentLabel = (index) => {
-    if (index === 0) return { type: 'intro', label: 'INTRO', style: styles.introOutroLabel }
-    if (index === segments.length - 1) return { type: 'outro', label: 'OUTRO', style: styles.introOutroLabel }
-    return { type: 'node', label: `Etap ${index}`, style: styles.nodeLabel }
+  const getSegmentLabel = (segment, index) => {
+    // Użyj typu z segmentu (intro, node, outro, cta)
+    const segmentType = segment.type || 'node'
+
+    if (segmentType === 'intro') {
+      return { type: 'intro', label: 'INTRO', style: styles.introOutroLabel }
+    }
+    if (segmentType === 'outro') {
+      return { type: 'outro', label: 'OUTRO', style: styles.introOutroLabel }
+    }
+    if (segmentType === 'cta') {
+      return { type: 'cta', label: 'CALL TO ACTION', style: { ...styles.introOutroLabel, color: '#fe6f00' } }
+    }
+    // Node - policz indeks etapu (pomijając intro)
+    const nodeIndex = segments.slice(0, index).filter(s => s.type === 'node').length + 1
+    return { type: 'node', label: `Etap ${nodeIndex}`, style: styles.nodeLabel }
   }
 
-  const getSegmentText = (index) => {
-    if (index === 0) return narration?.intro || ''
-    if (index === segments.length - 1) return narration?.outro || ''
-    const nodeIndex = index - 1
-    return narration?.nodes?.[nodeIndex]?.narration || ''
+  const getSegmentText = (segment, index) => {
+    const segmentType = segment.type || 'node'
+
+    if (segmentType === 'intro') return narration?.intro || segment.text || ''
+    if (segmentType === 'outro') return narration?.outro || segment.text || ''
+    if (segmentType === 'cta') return narration?.cta || segment.text || ''
+
+    // Node - znajdź odpowiedni node
+    const nodeIndex = segments.slice(0, index).filter(s => s.type === 'node').length
+    return narration?.nodes?.[nodeIndex]?.narration || segment.text || ''
   }
 
   const handlePlay = (index, audioData) => {
@@ -148,8 +165,8 @@ function AudioPreview({ audioSegments, narration, onRegenerate, isRegenerating }
   return (
     <div style={styles.segmentsList}>
       {segments.map((segment, index) => {
-        const { label, style } = getSegmentLabel(index)
-        const text = getSegmentText(index)
+        const { label, style } = getSegmentLabel(segment, index)
+        const text = getSegmentText(segment, index)
         const isPlaying = playingIndex === index
 
         return (

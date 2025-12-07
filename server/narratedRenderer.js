@@ -2,7 +2,7 @@ import puppeteer from 'puppeteer'
 import { spawn } from 'child_process'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
-import { mkdirSync, existsSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } from 'fs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -452,7 +452,7 @@ export async function calculateNarratedTiming(workflow, audioSegments, settings)
     currentTime += 300
   }
 
-  // Faza 4: Outro
+  // Faza 4: Outro (scroll w lewo do pierwszego node'a)
   const outroSegment = audioSegments?.find(s => s.type === 'outro')
   if (outroSegment?.audioPath && existsSync(outroSegment.audioPath)) {
     const outroDuration = await getAudioDuration(outroSegment.audioPath)
@@ -466,13 +466,29 @@ export async function calculateNarratedTiming(workflow, audioSegments, settings)
     currentTime += outroDuration + 500
   }
 
-  // Final zoom out
-  timeline.push({
-    phase: 'final_zoom_out',
-    startTime: currentTime,
-    endTime: currentTime + 1000
-  })
-  currentTime += 1000
+  // Faza 5: CTA (scroll po skosie do brandingu z powiększeniem)
+  const ctaSegment = audioSegments?.find(s => s.type === 'cta')
+  if (ctaSegment?.audioPath && existsSync(ctaSegment.audioPath)) {
+    const ctaDuration = await getAudioDuration(ctaSegment.audioPath)
+    timeline.push({
+      phase: 'cta',
+      startTime: currentTime,
+      endTime: currentTime + ctaDuration + 500,
+      audioPath: ctaSegment.audioPath,
+      text: ctaSegment.text
+    })
+    currentTime += ctaDuration + 500
+  }
+
+  // Final zoom out (tylko jeśli nie było CTA)
+  if (!ctaSegment) {
+    timeline.push({
+      phase: 'final_zoom_out',
+      startTime: currentTime,
+      endTime: currentTime + 1000
+    })
+    currentTime += 1000
+  }
 
   return {
     timeline,
@@ -488,6 +504,97 @@ function escapeHtml(text) {
     '"': '&quot;',
     "'": '&#39;'
   }[char]))
+}
+
+// Cache dla logo base64
+let cachedLogoBase64 = null
+
+function getLogoBase64() {
+  if (cachedLogoBase64) return cachedLogoBase64
+
+  const logoPath = join(__dirname, '..', 'img', 'aa logo.png')
+  if (existsSync(logoPath)) {
+    const logoBuffer = readFileSync(logoPath)
+    cachedLogoBase64 = `data:image/png;base64,${logoBuffer.toString('base64')}`
+    console.log('[Branding] Logo loaded and cached')
+  } else {
+    console.warn('[Branding] Logo not found at:', logoPath)
+    cachedLogoBase64 = '' // Pusty fallback
+  }
+  return cachedLogoBase64
+}
+
+// Generuj branding w prawym dolnym rogu
+function generateBrandingHTML(canvasSize) {
+  const margin = 40 // Taki sam jak dla awatara po lewej
+
+  // Logo 600x200 (proporcje 3:1) - zachowujemy oryginalne aspect ratio
+  const logoWidth = 340
+  const logoHeight = 113 // 340 / 3 = ~113
+  const brandingWidth = logoWidth // Szerokość = szerokość logo (bez dodatkowego paddingu)
+  const cornerRadius = 8 // Zaokrąglenie takie jak kafelki
+
+  // Zmniejszone odstępy między elementami (o połowę)
+  const spacing = 10
+  const textTopFontSize = 22 // Większy tekst górny
+  const textBottomFontSize = 24 // Większy tekst dolny
+
+  // Pozycja - prawy dolny róg (bez strzałek)
+  const totalHeight = textTopFontSize + spacing + logoHeight + spacing + textBottomFontSize
+  const x = canvasSize.width - brandingWidth - margin
+  const y = canvasSize.height - totalHeight - margin
+
+  // Logo jako base64
+  const logoBase64 = getLogoBase64()
+
+  return `
+    <g id="branding" transform="translate(${x}, ${y})">
+      <!-- Styles dla animacji -->
+      <style>
+        @keyframes pulse-glow {
+          0%, 100% { opacity: 0.1; }
+          50% { opacity: 0.25; }
+        }
+        #branding .glow-rect {
+          animation: pulse-glow 3s ease-in-out infinite;
+        }
+      </style>
+
+      <!-- Tekst nad logo: "Naucz się automatyzacji i AI" -->
+      <text x="${brandingWidth / 2}" y="${textTopFontSize}" fill="#ffffff" font-size="${textTopFontSize}" font-weight="600"
+            font-family="Inter, system-ui, sans-serif" text-anchor="middle" opacity="0.95">
+        Naucz się automatyzacji i AI
+      </text>
+
+      <!-- Logo container z subtelnym glow i zaokrągleniem -->
+      <g transform="translate(0, ${textTopFontSize + spacing})">
+        <!-- Subtelne pomarańczowe podświetlenie (glow) - mniejszy blur -->
+        <rect class="glow-rect" x="-4" y="-4" width="${logoWidth + 8}" height="${logoHeight + 8}"
+              rx="${cornerRadius + 4}" fill="#fe6f00" filter="url(#branding-glow)"/>
+
+        <!-- Tło logo z zaokrągleniem - BEZ paddingu -->
+        <rect x="0" y="0" width="${logoWidth}" height="${logoHeight}" rx="${cornerRadius}"
+              fill="#1a1a2e" stroke="#fe6f00" stroke-width="1.5" opacity="0.95"/>
+
+        <!-- Logo jako clipPath do zaokrąglenia -->
+        <defs>
+          <clipPath id="logo-clip">
+            <rect x="0" y="0" width="${logoWidth}" height="${logoHeight}" rx="${cornerRadius}"/>
+          </clipPath>
+        </defs>
+
+        <!-- Logo grafika - wypełnia całą przestrzeń bez paddingu -->
+        <image href="${logoBase64}" x="0" y="0" width="${logoWidth}" height="${logoHeight}"
+               clip-path="url(#logo-clip)" preserveAspectRatio="xMidYMid slice"/>
+      </g>
+
+      <!-- Tekst pod logo: AkademiaAutomatyzacji.com (bez strzałki) -->
+      <text x="${brandingWidth / 2}" y="${textTopFontSize + spacing + logoHeight + spacing + textBottomFontSize}"
+            font-size="${textBottomFontSize}" font-weight="700" font-family="Inter, system-ui, sans-serif" text-anchor="middle">
+        <tspan fill="#fe6f00">Akademia</tspan><tspan fill="#ffffff">Automatyzacji</tspan><tspan fill="#aaaaaa">.com</tspan>
+      </text>
+    </g>
+  `
 }
 
 // Generuj HTML dla trybu narrated
@@ -655,6 +762,16 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
       <filter id="popup-shadow" x="-50%" y="-50%" width="200%" height="200%">
         <feDropShadow dx="0" dy="6" stdDeviation="10" flood-opacity="0.5"/>
       </filter>
+      <!-- Branding glow filter - pomarańczowy (subtelny) -->
+      <filter id="branding-glow" x="-50%" y="-50%" width="200%" height="200%">
+        <feGaussianBlur stdDeviation="6" result="blur"/>
+        <feFlood flood-color="#fe6f00" flood-opacity="0.35" result="color"/>
+        <feComposite in="color" in2="blur" operator="in" result="coloredBlur"/>
+        <feMerge>
+          <feMergeNode in="coloredBlur"/>
+          <feMergeNode in="SourceGraphic"/>
+        </feMerge>
+      </filter>
     </defs>
 
     <!-- Background -->
@@ -669,6 +786,9 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
       <g id="nodes">${nodesHtml}</g>
       ${popupsContainer}
     </g>
+
+    <!-- BRANDING - prawy dolny róg (stały, nie transformowany przez kamerę) -->
+    ${generateBrandingHTML(canvasSize)}
   </svg>
 
   <script>
@@ -1003,13 +1123,13 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
         highlightNode('', false);
 
       } else if (currentPhase.phase === 'outro') {
-        // Outro: scroll od lewej do prawej przez CALE workflow z opisami
+        // Outro: scroll od PRAWEJ do LEWEJ (do pierwszego node'a)
         const progress = (time - currentPhase.startTime) / (currentPhase.endTime - currentPhase.startTime);
         const eased = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2;
 
-        // Scroll od lewej do prawej - pokazujemy wszystkie popupy
-        const startX = bounds.x + bounds.width * 0.1;
-        const endX = bounds.x + bounds.width * 0.9;
+        // Scroll od prawej do lewej - kończymy na pierwszym node
+        const startX = bounds.x + bounds.width * 0.9; // Prawa strona (ostatni node)
+        const endX = bounds.x + bounds.width * 0.1;   // Lewa strona (pierwszy node)
 
         cameraX = startX + (endX - startX) * eased;
         cameraY = fullCenterY;
@@ -1018,13 +1138,60 @@ function generateNarratedHTML(workflow, settings, canvasSize, timeline) {
 
         highlightNode('', false);
 
+      } else if (currentPhase.phase === 'cta') {
+        // CTA: branding przesuwa się na środek i powiększa, workflow znika
+        const progress = (time - currentPhase.startTime) / (currentPhase.endTime - currentPhase.startTime);
+        const eased = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+
+        // Kamera - zostaje na miejscu (pierwszy node) ale przesuwamy workflow w lewo
+        cameraX = bounds.x + bounds.width * 0.1;
+        cameraY = fullCenterY;
+        cameraZoom = introZoom;
+
+        // Workflow przesuwa się w lewo i zanika
+        const workflowOffsetX = -canvasWidth * 1.2 * eased; // Przesunięcie daleko w lewo
+        const workflowOpacity = 1 - eased; // Całkowite zanikanie
+        content.setAttribute('transform', 'translate(' + (canvasWidth / 2 - cameraX * cameraZoom + workflowOffsetX) + ',' + (canvasHeight / 2 - cameraY * cameraZoom) + ') scale(' + cameraZoom + ')');
+        content.style.opacity = workflowOpacity;
+
+        // Branding - przesuwa się na środek i powiększa
+        const branding = document.getElementById('branding');
+        if (branding) {
+          // Wymiary brandingu (z generateBrandingHTML)
+          const brandingWidth = 340;
+          const brandingHeight = 179; // 22 + 10 + 113 + 10 + 24
+          const margin = 40;
+
+          // Pozycja startowa (prawy dolny róg - oryginalna pozycja)
+          const brandingStartX = canvasWidth - brandingWidth - margin;
+          const brandingStartY = canvasHeight - brandingHeight - margin;
+          const brandingStartScale = 1;
+
+          // Pozycja docelowa (środek ekranu) - z uwzględnieniem skali
+          // Po skalowaniu, branding będzie większy, więc musimy to uwzględnić
+          const brandingEndScale = 1.5; // Powiększenie do 150%
+          const scaledWidth = brandingWidth * brandingEndScale;
+          const scaledHeight = brandingHeight * brandingEndScale;
+          const brandingEndX = (canvasWidth - scaledWidth) / 2;
+          const brandingEndY = (canvasHeight - scaledHeight) / 2;
+
+          const brandingX = brandingStartX + (brandingEndX - brandingStartX) * eased;
+          const brandingY = brandingStartY + (brandingEndY - brandingStartY) * eased;
+          const brandingScale = brandingStartScale + (brandingEndScale - brandingStartScale) * eased;
+
+          branding.setAttribute('transform', 'translate(' + brandingX + ',' + brandingY + ') scale(' + brandingScale + ')');
+        }
+
+        highlightNode('', false);
+        return; // Skip normal camera transform
+
       } else if (currentPhase.phase === 'final_zoom_out') {
         // Final zoom out - podsumowanie calego workflow
         const progress = (time - currentPhase.startTime) / (currentPhase.endTime - currentPhase.startTime);
         const eased = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2;
 
         // Z pozycji outro do pelnego widoku
-        const startX = bounds.x + bounds.width * 0.9;
+        const startX = bounds.x + bounds.width * 0.1; // Teraz kończymy na lewej stronie
         const startZoom = introZoom;
 
         cameraX = startX + (fullCenterX - startX) * eased;
@@ -1371,7 +1538,8 @@ async function encodeNarratedVideo(framesDir, outputPath, fps, timeline, singleA
     })
 
     const mixInputs = Array.from({ length: sfxPhases.length }, (_, i) => `[a${i}]`).join('')
-    const filterComplex = filterParts.join(';') + `;${mixInputs}amix=inputs=${sfxPhases.length}:duration=longest:normalize=0[aout]`
+    // WAŻNE: duration=longest dla audio + apad aby wypełnić ciszą do końca wideo
+    const filterComplex = filterParts.join(';') + `;${mixInputs}amix=inputs=${sfxPhases.length}:duration=longest:normalize=0,apad[aout]`
 
     const ffmpegArgs = [
       '-y',
@@ -1387,7 +1555,7 @@ async function encodeNarratedVideo(framesDir, outputPath, fps, timeline, singleA
       '-pix_fmt', 'yuv420p',
       '-preset', 'medium',
       '-crf', '18',
-      '-shortest',
+      '-shortest',  // Teraz bezpieczne bo audio jest przedłużone przez apad
       outputPath
     ]
 

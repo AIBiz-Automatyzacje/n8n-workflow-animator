@@ -94,6 +94,10 @@ function NarrationEditor({ narration, onChange }) {
     onChange({ ...narration, outro: value })
   }
 
+  const handleCtaChange = (value) => {
+    onChange({ ...narration, cta: value })
+  }
+
   const handleNodeChange = (index, field, value) => {
     const newNodes = [...narration.nodes]
     newNodes[index] = { ...newNodes[index], [field]: value }
@@ -148,7 +152,19 @@ function NarrationEditor({ narration, onChange }) {
           onChange={(e) => handleOutroChange(e.target.value)}
           placeholder="Podsumowanie - co osiągnęliśmy"
         />
-        <div style={styles.hint}>Czytane na końcu wideo jako voice-over</div>
+        <div style={styles.hint}>Czytane podczas scrollu w lewo (od ostatniego do pierwszego node'a)</div>
+      </div>
+
+      {/* Call to Action */}
+      <div style={styles.section}>
+        <div style={{...styles.sectionTitle, color: '#fe6f00'}}>CALL TO ACTION (opcjonalne)</div>
+        <textarea
+          style={{...styles.textarea, borderColor: '#fe6f00'}}
+          value={narration.cta || ''}
+          onChange={(e) => handleCtaChange(e.target.value)}
+          placeholder="Np: Jeśli chcesz nauczyć się budować takie automatyzacje, zapraszamy do Akademii Automatyzacji."
+        />
+        <div style={styles.hint}>Tekst wyświetlany podczas animacji scroll do brandingu (zostaw puste aby pominąć)</div>
       </div>
     </div>
   )

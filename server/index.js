@@ -745,34 +745,36 @@ async function combineVideoWithUploadedAvatar(mainVideoPath, avatarVideoPath, ou
     // FFmpeg command - UPROSZCZONY (bez zaokrągleń i glow):
     // 1. Przeskaluj awatara
     // 2. Usuń zielone tło (chroma key)
-    // 3. Overlay na głównym wideo
-    // 4. Miksuj audio: SFX + voiceover
+    // 3. Overlay na głównym wideo (eof_action=pass - kontynuuj gdy awatar się skończy)
+    // 4. Miksuj audio: SFX + voiceover (duration=first - użyj długości głównego wideo)
     const ffmpeg = spawn('ffmpeg', [
       '-y',
-      '-i', mainVideoPath,      // Input 0: główne wideo (z SFX)
-      '-i', avatarVideoPath,    // Input 1: awatar (z voiceover)
+      '-i', mainVideoPath,      // Input 0: główne wideo (z SFX) - DŁUŻSZE
+      '-i', avatarVideoPath,    // Input 1: awatar (z voiceover) - KRÓTSZE
       '-filter_complex',
       // === VIDEO ===
       // 1. Przeskaluj awatara do 30% szerokości
       `[1:v]scale=iw*${avatarScale}:-1[scaled];` +
       // 2. Usuń zielone tło (chroma key)
       `[scaled]chromakey=0x00FF00:0.25:0.08[avatar];` +
-      // 3. Overlay awatara na głównym wideo (bez efektów)
-      `[0:v][avatar]overlay=${overlayPosition}:format=auto,format=yuv420p[outv];` +
+      // 3. Overlay awatara na głównym wideo
+      // eof_action=pass - gdy awatar się skończy, kontynuuj z samym głównym wideo
+      `[0:v][avatar]overlay=${overlayPosition}:format=auto:eof_action=pass,format=yuv420p[outv];` +
       // === AUDIO ===
       // 4. Miksuj SFX (główne wideo) + voiceover (awatar)
+      // duration=first - użyj długości PIERWSZEGO inputu (główne wideo)
       `[0:a]volume=1.0[sfx];` +
       `[1:a]volume=1.0[voice];` +
-      `[sfx][voice]amix=inputs=2:duration=longest:normalize=0[aout]`,
+      `[sfx][voice]amix=inputs=2:duration=first:normalize=0[aout]`,
       '-map', '[outv]',         // Użyj połączonego wideo
-      '-map', '[aout]',         // Użyj zmiksowanego audio (SFX + voiceover)
+      '-map', '[aout]',         // Użyj zmiksowanego audio
       '-c:v', 'libx264',
       '-preset', 'fast',
       '-crf', '23',
       '-pix_fmt', 'yuv420p',    // Kompatybilność z QuickTime
       '-c:a', 'aac',
       '-b:a', '192k',
-      '-shortest',              // Zakończ gdy krótsze wideo się skończy
+      // BEZ -shortest! Używamy długości głównego wideo
       outputPath
     ])
 
